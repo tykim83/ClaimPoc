@@ -11,16 +11,16 @@ injected service), an append-only audit trail, and per-task state tracking in Co
 real document parsing, real AI calls, or real filing. This repo exists to validate plumbing and
 observability, nothing else.
 
-The design mirrors a real system. We use **generic names** (mapping is just context):
+The design mirrors a real system; projects use the real domain names:
 
-| Real stage | This repo | Role |
+| Real stage | Project | Role |
 |---|---|---|
-| Comms (email intake) | **Intake** | Creates the `CorrelationId`, emits the first message |
-| WSM (work state mgmt) | **Orchestrator** | Orchestrates the flow, tracks task state in Cosmos, Blazor UI |
-| DocInt (AI classify/extract) | **Classifier** | Mock brick |
-| Automation (prepare claim) | **Preparer** | Mock brick |
-| Filer (file into core) | **Filer** | Mock brick |
-| Audit sink | **Audit** | Consumes audit events, stores in Cosmos, Blazor UI |
+| Comms (email intake) | **ClaimFlow.Comms** | Creates the `CorrelationId`, emits the first event |
+| WSM (work state mgmt) | **ClaimFlow.Tasks** | Durable orchestrator; task state in Cosmos, Blazor UI |
+| DocInt (classify/extract) | **ClaimFlow.Classifier** | Mock brick |
+| Automation (prepare claim) | **ClaimFlow.Preparer** | Mock brick |
+| Filer (file into core) | **ClaimFlow.Filer** | Mock brick |
+| Audit sink | **ClaimFlow.Audit** | Consumes audit events → Cosmos, Blazor UI |
 
 ---
 
@@ -46,33 +46,30 @@ The human is guiding to the result: nothing proceeds past a checkpoint they didn
 
 A run of a single claim must demonstrate all of the following in the Aspire dashboard:
 
-1. **CorrelationId in log scope.** Intake generates a `CorrelationId` (GUID). It rides every message
+1. **CorrelationId in log scope.** Comms generates a `CorrelationId` (GUID). It rides every message
    as a Service Bus application property. Every service opens a log scope with it on receipt. Every
    subsequent log line in that async flow — **including logs from a separate injected service** —
    carries the `CorrelationId`, without it being passed around by hand.
-2. **Distributed trace.** One trace spans Intake → Orchestrator → each brick → back, stitched
+2. **Distributed trace.** One trace spans Comms → Tasks → each brick → back, stitched
    automatically via OTel trace-context propagation over Service Bus.
 3. **Metrics.** A custom meter emits per-stage counters (success/fail) and a latency histogram.
 4. **Audit trail.** Each stage publishes an audit event; Audit persists to Cosmos, queryable by
    `CorrelationId`.
-5. **Task state.** Orchestrator persists per-claim task state to Cosmos, shown in its UI.
+5. **Task state.** Tasks persists per-claim task state to Cosmos, shown in its UI.
 
 ---
 
 ## Tech stack
 
-- **Aspire 13.4.x** on **.NET 10** (renamed from ".NET Aspire"; CLI is `aspire`).
-- **Azure Service Bus emulator** for all messaging (`RunAsEmulator()` — emulator container +
-  companion SQL Server container).
+- **Aspire 13.2.4** on **.NET 10** (CLI is `aspire`).
+- **Azure Service Bus emulator** for all messaging (`RunAsEmulator()` — emulator + companion SQL Server).
 - **Azure Cosmos DB Linux preview emulator** (`RunAsPreviewEmulator()` + Data Explorer).
-- **Blazor** for the Orchestrator and Audit UIs.
+- **Blazor** for the Tasks and Audit UIs.
 - **OpenTelemetry** via `ServiceDefaults` (Aspire wires logs/metrics/traces to the dashboard).
-- **Intake** ends up as an **Azure Functions (isolated)** app — but is built as a worker first and
-  ported later (see stages).
+- **Azure Functions (isolated)** for Comms and the Tasks durable app.
 
-> ⚠️ Aspire/Azure integration APIs move between versions. **Do not trust method/package names from
-> memory.** Verify every AppHost API and package ID against the installed version before using it.
-> If a snippet in this file doesn't compile, fix it against the installed API — don't guess.
+(API-drift warning lives once, in Critical gotchas. Verify package/API names against the installed
+version — don't trust snippets here or memory.)
 
 ---
 
@@ -147,18 +144,18 @@ comes purely from the scope the middleware opened, and flows via `AsyncLocal`.
 
 ### The system test (Stage 0 acceptance)
 
-A minimal live slice that exercises the middleware, using the first two real endpoints as the harness
+A minimal live slice that exercises the middleware, using the two real endpoints as the harness
 so nothing is throwaway:
 
-- **Intake** (worker) — creates a `CorrelationId`, has an **injected service** that also logs, then
-  publishes one message via the shared publisher.
+- **Comms** (already built) — creates a `CorrelationId`, has an **injected service** that also logs,
+  then publishes one message via the shared publisher.
 - **Classifier** — receives via the shared receive middleware and its handler logs.
 - **AppHost** — SB emulator + the one queue.
 
 **Acceptance check (the human eyeballs this in the dashboard):**
-1. The same `CorrelationId` appears on: Intake's log, Intake's **injected service's** log, and
+1. The same `CorrelationId` appears on: Comms's log, Comms's **injected service's** log, and
    Classifier's handler log — none of which were passed the id explicitly.
-2. A single trace links Intake → Classifier.
+2. A single trace links Comms → Classifier.
 3. The stage metric incremented.
 
 If (1) fails, the cause is almost always `IncludeScopes`. Fix the foundation, not the services.
@@ -171,49 +168,38 @@ human has already approved.
 ## Architecture (full pipeline, built on the foundation)
 
 ```
-Intake ──> Orchestrator ──> Classifier ─┐
-                        ──> Preparer   ─┼──> (responses) ──> Orchestrator
-                        ──> Filer      ─┘
-   every service ─────────────────────────> Audit
+Comms ──> Tasks ──> Classifier ─┐
+                ──> Preparer   ─┼──> (responses) ──> Tasks
+                ──> Filer      ─┘
+   every service ───────────────────────> Audit
 ```
 
 ## Messaging topology
 
 All communication is Service Bus **queues** (not topics — keep it simple for the demo):
 
-- `orchestrator-in` — Intake → Orchestrator
-- `classifier-in`, `preparer-in`, `filer-in` — Orchestrator → each brick
-- `orchestrator-responses` — every brick → Orchestrator (matched by `CorrelationId` + `Stage`)
+- `orchestrator-in` — Comms → Tasks
+- `classifier-in`, `preparer-in`, `filer-in` — Tasks → each brick
+- `orchestrator-responses` — every brick → Tasks (matched by `CorrelationId` + `Stage`)
 - `audit-in` — every service → Audit
 
 Every message carries application properties `CorrelationId`, `Stage`, and (on responses) `Status`.
 Bodies are small JSON DTOs. No real payloads.
-
-## The observability contract
-
-Implemented **once, in the shared middleware** — services never reimplement it. Two independent
-mechanisms; the demo must show both:
-
-1. **Business CorrelationId → log scope** (Stage 0 above). `IncludeScopes = true` is mandatory.
-2. **OTel trace context.** `Azure.Messaging.ServiceBus` auto-propagates `traceparent`. Do **not**
-   hand-roll trace propagation; if traces don't link, fix instrumentation in ServiceDefaults.
-
-Metrics: one `Meter` (e.g. `ClaimFlow.Pipeline`) with per-stage counters + a duration histogram,
-registered with OTel in ServiceDefaults.
 
 ---
 
 ## Solution structure
 
 ```
-ClaimFlow.sln
+ClaimFlow.slnx
   src/
-    ClaimFlow.AppHost/           # Aspire orchestration: SB + Cosmos resources, project wiring
-    ClaimFlow.ServiceDefaults/   # OTel (logs+metrics+traces), IncludeScopes, health, SB tracing
-    ClaimFlow.Contracts/         # message DTOs, app-property + queue + telemetry name constants
+    ClaimFlow.AppHost/           # Aspire orchestration: SB + Cosmos resources, wiring   [DONE]
+    ClaimFlow.ServiceDefaults/   # OTel, IncludeScopes, health; also holds the meter today [DONE]
+    ClaimFlow.Comms/             # Azure Function (isolated), email intake                [DONE]
+    # --- planned ---
+    ClaimFlow.Contracts/         # message DTOs, app-property + queue + telemetry names (shared)
     ClaimFlow.Messaging/         # THE MIDDLEWARE: receive scope/metrics/audit, publisher, DI ext
-    ClaimFlow.Intake/            # worker + injected service first  ->  Azure Function later
-    ClaimFlow.Orchestrator/      # worker + Blazor UI + Cosmos task store
+    ClaimFlow.Tasks/             # Durable Functions orchestrator + Blazor UI + Cosmos task store
     ClaimFlow.Classifier/        # mock brick
     ClaimFlow.Preparer/          # mock brick
     ClaimFlow.Filer/             # mock brick
@@ -256,8 +242,10 @@ ClaimFlow.sln
   `Microsoft.Azure.Functions.Worker` to **2.52.0** (Core/Grpc/Worker must match) or you get a runtime
   `MissingMethodException` on `DefaultTraceContext..ctor` (500s). Same root cause as the classic
   App Insights double-logging.
+- **Trace context.** `Azure.Messaging.ServiceBus` auto-propagates `traceparent` — don't hand-roll it;
+  if hops don't link into one trace, fix instrumentation in ServiceDefaults.
 - **Aspire resource names can't start with a digit** (`ASPIRE006`). Use a letter prefix for flow
-  order, e.g. `s1-comms`, `s2-orchestrator` — not `1-comms`.
+  order, e.g. `s1-comms`, `s2-tasks` — not `1-comms`.
 - **Prune-package data missing (`NETSDK1226`)** on .NET 10 SDK 10.0.1xx with the AspNetCore
   FrameworkReference. Fixed repo-wide via `AllowMissingPrunePackageData=true` in `Directory.Build.props`.
 - **Verifying telemetry without the GUI:** `aspire otel logs|spans|traces <resource>` (add
@@ -268,38 +256,25 @@ ClaimFlow.sln
 
 ---
 
-## Stages
+## Roadmap
 
-Build vertical slices; run (`aspire run`) and verify each before the next. Each stage lists its
-**acceptance check** (human-owned) and **what the human steers**.
+Build vertical slices; run (`aspire run`) and verify each before the next, under the control loop above.
 
-- [ ] **Stage 0 — Shared foundation + system test.** ServiceDefaults, Contracts, Messaging
-      middleware, and the Intake→Classifier harness that proves the middleware.
-      - *Acceptance:* the three-part CorrelationId proof + linked trace + a metric (see system test).
+- [ ] **Stage 0 — Shared foundation.** `ClaimFlow.Contracts` (DTOs/queue names) + `ClaimFlow.Messaging`
+      middleware (receive scope/metrics/audit + publisher) + Service Bus emulator, proven by wiring
+      Comms → Classifier.
+      - *Acceptance:* the same `CorrelationId` on every hop's logs (incl. a separate injected service),
+        one linked trace, a stage metric.
       - *Human steers:* the scope/publisher/handler pattern that becomes the standard everywhere.
       - **Gate: nothing advances until this is green.**
-- [ ] **Stage 1 — Orchestrator + fan-out.** Insert Orchestrator between Intake and the three bricks;
-      bricks reply on `orchestrator-responses`.
-      - *Acceptance:* one trace spans Intake → Orchestrator → all bricks → back; correlation on every hop.
-      - *Human steers:* queue topology, how responses are matched.
-- [ ] **Stage 2 — Cosmos task state + Orchestrator UI.** Persist per-claim state; Blazor UI.
-      - *Acceptance:* state visible in the UI and in Cosmos Data Explorer.
-      - *Human steers:* which state fields matter.
-- [ ] **Stage 3 — Metrics.** Per-stage counters + latency histogram surfaced in the dashboard.
-      - *Acceptance:* metrics show up in the dashboard metrics view.
-      - *Human steers:* which metrics are worth emitting.
-- [ ] **Stage 4 — Audit brick + UI.** Audit consumes `audit-in`, stores in Cosmos, Blazor UI.
-      - *Acceptance:* events queryable by `CorrelationId` in the Audit UI.
-      - *Human steers:* audit event shape.
-- [ ] **Stage 5 — Port Intake to an Azure Function.** Same behavior behind a Service Bus trigger.
-      - *Acceptance:* the Stage 0 correlation proof still holds from *inside* the Function.
-      - *Human steers:* whether it's worth doing at all, or if the worker is enough.
+- [ ] **Then:** build out the **Durable-orchestration sample journey** (see the section below) — Tasks
+      + the 3 bricks + Audit — one slice at a time, each with its own acceptance check.
 
 ## Commands
 
 ```bash
 aspire new          # scaffold AppHost + ServiceDefaults (interactive template picker)
-aspire add          # add integrations (verify exact package IDs for 13.4):
+aspire add          # add integrations (verify exact package IDs for 13.2.4):
                     #   Aspire.Hosting.Azure.ServiceBus, Aspire.Hosting.Azure.CosmosDB
 aspire run          # run the whole app + dashboard
 
@@ -357,3 +332,9 @@ use 13.2.x package versions), Docker running, **Azure Functions Core Tools 4.12.
 `ClaimFlow.Messaging` middleware (receive scope/metrics/audit + publisher), add the Service Bus
 emulator, and wire Comms → Classifier to prove the middleware. The generic per-stage metrics
 (success/fail + latency) belong in that middleware, not in services.
+
+## Planned work
+
+The next chunk — the **Durable-orchestration sample journey** (Comms → Tasks durable → 3 bricks → back)
+— lives in **[`PLAN.md`](PLAN.md)**: components, design decisions (CorrelationId = orchestration
+instanceId, two stores, orchestrator determinism), and open questions.
