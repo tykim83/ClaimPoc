@@ -241,9 +241,30 @@ ClaimFlow.sln
   Aspire Cosmos client integration — **do not** use a Cosmos change-feed trigger (broken vs emulator).
 - **Service Bus emulator** brings a SQL Server sidecar; first cold start is slow. Use
   `ContainerLifetime.Persistent` on the emulators to avoid re-pulling each run.
-- **Azure Functions in Aspire is still preview.** Keep Functions tooling current. This is why Intake
-  is worker-first, ported to a Function only after the pipeline works.
-- **API drift.** Re-confirm AppHost/client APIs against installed 13.4 packages, not these snippets.
+- **Azure Functions in Aspire is still preview.** Keep Functions tooling current. (Note: the human
+  chose to make Comms a Function *early* rather than worker-first — see below for what that cost.)
+- **API drift.** Re-confirm AppHost/client APIs against the **installed 13.2.4** packages, not these
+  snippets and not 13.4.x. Verify extension-method namespaces by decompiling (`ilspycmd`) when a
+  `using` isn't obvious — e.g. `UseFunctionsWorkerDefaults` lives in
+  `Microsoft.Azure.Functions.Worker.OpenTelemetry`.
+- **Isolated-worker telemetry (duplicate logs + flat traces).** With a .NET-isolated Function under
+  Aspire, both the Functions *host* and the *worker* export to the same OTLP endpoint, so every user
+  log appears **twice** (worker's scoped copy + host's stripped relay) and the trace has only the
+  host's HTTP span. Fix, all three needed: (1) `host.json` → `"telemetryMode": "OpenTelemetry"`;
+  (2) add `Microsoft.Azure.Functions.Worker.OpenTelemetry` and call
+  `builder.Services.AddOpenTelemetry().UseFunctionsWorkerDefaults()`; (3) align
+  `Microsoft.Azure.Functions.Worker` to **2.52.0** (Core/Grpc/Worker must match) or you get a runtime
+  `MissingMethodException` on `DefaultTraceContext..ctor` (500s). Same root cause as the classic
+  App Insights double-logging.
+- **Aspire resource names can't start with a digit** (`ASPIRE006`). Use a letter prefix for flow
+  order, e.g. `s1-comms`, `s2-orchestrator` — not `1-comms`.
+- **Prune-package data missing (`NETSDK1226`)** on .NET 10 SDK 10.0.1xx with the AspNetCore
+  FrameworkReference. Fixed repo-wide via `AllowMissingPrunePackageData=true` in `Directory.Build.props`.
+- **Verifying telemetry without the GUI:** `aspire otel logs|spans|traces <resource>` (add
+  `--format Json` for attributes/scopes/trace ids). There is **no** `aspire otel metrics`, and
+  `aspire export` omits metrics — metrics must be eyeballed in the dashboard Metrics tab.
+- **Don't `pkill -f` a pattern that matches your own launch command** (e.g. `"aspire run"` or
+  `"ClaimFlow.AppHost"`) — it SIGTERMs the shell doing the kill. Kill in a step separate from launch.
 
 ---
 
@@ -303,6 +324,36 @@ the first `aspire run` isn't blocked on downloads.
 
 ## Current status
 
-- [ ] Stage 0 — not started. (Next: agree scope + acceptance, then build the foundation + system test.)
+**Pre-Stage-0 exploration slice — DONE and verified.** We did *not* build the full Stage 0
+(no Service Bus, no Classifier, no `ClaimFlow.Messaging` middleware yet). Instead we proved the
+observability plumbing end-to-end on a single service, and the human pulled the Azure Function
+forward from Stage 5.
 
-_(Update this section as work progresses.)_
+What exists and works (verified live in the Aspire dashboard + via `aspire otel`):
+
+- **Solution** (`ClaimFlow.slnx`): `ClaimFlow.AppHost`, `ClaimFlow.ServiceDefaults`, `ClaimFlow.Comms`.
+  - `Directory.Build.props` sets `AllowMissingPrunePackageData=true` (NETSDK1226 workaround, see gotchas).
+- **`ClaimFlow.Comms`** (was "Intake" — renamed to the real domain name): an **Azure Functions
+  isolated worker** with an HTTP-trigger `Starter` function. It creates a `CorrelationId`, opens a
+  `BeginScope`, logs, and calls a DI-injected `ICommsService` that logs too. Proven: the same
+  `CorrelationId` rides **both** log lines (the function's `FunctionContext` logger *and* the
+  service's DI logger) via the AsyncLocal scope — the service is never handed the id.
+- **Telemetry integration fixed** (isolated worker + Aspire): logs are single (not duplicated) and
+  the function work is a **child span** in the host's trace. See the new "isolated-worker telemetry"
+  gotcha for the how/why.
+- **Metrics**: `ClaimIntakeMetrics` (an `IMeterFactory` singleton in ServiceDefaults) exposes an
+  `EmailReceived` counter, registered with OTel via `AddClaimFlowMetrics()` and incremented at the
+  intake checkpoint. Meter name held in one const (`Telemetry.MeterName`) used by both `Create(...)`
+  and `AddMeter(...)`.
+- **`ClaimFlow.Shared`/`Contracts` was created then removed** — telemetry names live next to the
+  meter in ServiceDefaults for now. A dependency-light shared project should come **back at Stage 0**
+  for message DTOs, queue names, and app-property keys (things multiple services must share).
+
+Installed toolchain (verify, don't assume): **.NET SDK 10.0.108**, **Aspire CLI 13.2.4** (NOT 13.4.x —
+use 13.2.x package versions), Docker running, **Azure Functions Core Tools 4.12.1** installed under
+`~/.local` (npm global needed manual zip extraction), Azurite present.
+
+**Next (real Stage 0):** agree scope + acceptance, then build `ClaimFlow.Contracts` (DTOs/queue names),
+`ClaimFlow.Messaging` middleware (receive scope/metrics/audit + publisher), add the Service Bus
+emulator, and wire Comms → Classifier to prove the middleware. The generic per-stage metrics
+(success/fail + latency) belong in that middleware, not in services.
