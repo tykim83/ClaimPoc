@@ -1,8 +1,8 @@
 using Microsoft.Extensions.Logging;
 
-namespace ClaimFlow.Intake;
+namespace ClaimFlow.Comms;
 
-public interface IIntakeService
+public interface ICommsService
 {
     void StartProcess();
 }
@@ -11,10 +11,10 @@ public interface IIntakeService
 // CorrelationId. If the id shows up on its log line, it flowed in via the log
 // scope the function opened (AsyncLocal in the logging scope provider) — even
 // though the function's logger came from FunctionContext and this one from DI.
-public class IntakeService(ILogger<IntakeService> logger) : IIntakeService
+public class CommsService(ILogger<CommsService> logger) : ICommsService
 {
     public void StartProcess()
     {
-        logger.LogInformation("Intake service: started process (no CorrelationId passed to me)");
+        logger.LogInformation("Comms service: started process (no CorrelationId passed to me)");
     }
 }

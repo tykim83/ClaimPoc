@@ -1,7 +1,7 @@
 <Project Sdk="Aspire.AppHost.Sdk/13.2.4">
 
   <ItemGroup>
-    <ProjectReference Include="..\ClaimFlow.Intake\ClaimFlow.Intake.csproj" />
+    <ProjectReference Include="..\ClaimFlow.Comms\ClaimFlow.Comms.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,7 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/ClaimFlow.AppHost/ClaimFlow.AppHost.csproj" />
-    <Project Path="src/ClaimFlow.Intake/ClaimFlow.Intake.csproj" />
+    <Project Path="src/ClaimFlow.Comms/ClaimFlow.Comms.csproj" />
     <Project Path="src/ClaimFlow.ServiceDefaults/ClaimFlow.ServiceDefaults.csproj" />
   </Folder>
 </Solution>

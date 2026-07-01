@@ -7,6 +7,7 @@ using Microsoft.Extensions.ServiceDiscovery;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
+using ClaimFlow.ServiceDefaults;
 
 namespace Microsoft.Extensions.Hosting;
 
@@ -21,6 +22,8 @@ public static class Extensions
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.ConfigureOpenTelemetry();
+
+        builder.AddClaimFlowMetrics();
 
         builder.AddDefaultHealthChecks();
 
@@ -57,7 +60,9 @@ public static class Extensions
             {
                 metrics.AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
-                    .AddRuntimeInstrumentation();
+                    .AddRuntimeInstrumentation()
+                    // Our custom meter (business checkpoint counters).
+                    .AddMeter(ClaimFlow.ServiceDefaults.Telemetry.MeterName);
             })
             .WithTracing(tracing =>
             {
@@ -93,6 +98,16 @@ public static class Extensions
         //    builder.Services.AddOpenTelemetry()
         //       .UseAzureMonitor();
         //}
+
+        return builder;
+    }
+
+    // Registers the pipeline's instruments as a DI singleton. IMeterFactory is
+    // provided by the metrics infrastructure (AddMetrics is idempotent).
+    public static TBuilder AddClaimFlowMetrics<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
+    {
+        builder.Services.AddMetrics();
+        builder.Services.AddSingleton<ClaimIntakeMetrics>();
 
         return builder;
     }

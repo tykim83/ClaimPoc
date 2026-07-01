@@ -1,11 +1,12 @@
 using System.Net;
+using ClaimFlow.ServiceDefaults;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 
-namespace ClaimFlow.Intake;
+namespace ClaimFlow.Comms;
 
-public class StarterFunction(IIntakeService intakeService)
+public class StarterFunction(ICommsService commsService, ClaimIntakeMetrics metrics)
 {
     private const string CorrelationIdKey = "CorrelationId";
 
@@ -22,8 +23,10 @@ public class StarterFunction(IIntakeService intakeService)
             [CorrelationIdKey] = correlationId,
         });
 
-        logger.LogInformation("Intake function: created claim, CorrelationId generated");
-        intakeService.StartProcess();
+        metrics.EmailReceived.Add(1);
+
+        logger.LogInformation("Comms function: received email, CorrelationId generated");
+        commsService.StartProcess();
 
         var response = req.CreateResponse(HttpStatusCode.OK);
         response.WriteString(correlationId);

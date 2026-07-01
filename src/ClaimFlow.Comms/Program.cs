@@ -1,4 +1,4 @@
-using ClaimFlow.Intake;
+using ClaimFlow.Comms;
 using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Azure.Functions.Worker.OpenTelemetry;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +14,6 @@ builder.AddServiceDefaults();
 // copy of each user log.
 builder.Services.AddOpenTelemetry().UseFunctionsWorkerDefaults();
 
-builder.Services.AddSingleton<IIntakeService, IntakeService>();
+builder.Services.AddSingleton<ICommsService, CommsService>();
 
 builder.Build().Run();
