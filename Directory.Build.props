@@ -1,0 +1,11 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Workaround for .NET 10 SDK 10.0.1xx: prune-package data for the
+         Microsoft.AspNetCore.App shared framework is not present, which fails
+         the build with NETSDK1226. Disabling prune only skips a publish-time
+         trimming optimization we don't rely on for this dev/demo app. -->
+    <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
+  </PropertyGroup>
+
+</Project>

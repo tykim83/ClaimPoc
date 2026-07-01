@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "ClaimFlow.Intake": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 7108",
+      "launchBrowser": false
+    }
+  }
+}
