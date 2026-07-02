@@ -6,6 +6,7 @@
     <ProjectReference Include="..\ClaimFlow.Classifier\ClaimFlow.Classifier.csproj" />
     <ProjectReference Include="..\ClaimFlow.Preparer\ClaimFlow.Preparer.csproj" />
     <ProjectReference Include="..\ClaimFlow.Filer\ClaimFlow.Filer.csproj" />
+    <ProjectReference Include="..\ClaimFlow.Dashboard\ClaimFlow.Dashboard.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -7,5 +7,6 @@
     <Project Path="src/ClaimFlow.Classifier/ClaimFlow.Classifier.csproj" />
     <Project Path="src/ClaimFlow.Preparer/ClaimFlow.Preparer.csproj" />
     <Project Path="src/ClaimFlow.Filer/ClaimFlow.Filer.csproj" />
+    <Project Path="src/ClaimFlow.Dashboard/ClaimFlow.Dashboard.csproj" />
   </Folder>
 </Solution>

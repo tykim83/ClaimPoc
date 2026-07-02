@@ -21,7 +21,7 @@ var cosmos = builder.AddAzureCosmosDB("cosmos")
         .WithLifetime(ContainerLifetime.Persistent));
 var events = cosmos.AddCosmosDatabase("claimflow").AddContainer("events", "/correlationId");
 
-builder.AddAzureFunctionsProject<Projects.ClaimFlow_Comms>("s1-comms")
+var comms = builder.AddAzureFunctionsProject<Projects.ClaimFlow_Comms>("s1-comms")
     .WithReference(serviceBus)
     .WaitFor(orchestratorIn);
 
@@ -42,5 +42,14 @@ builder.AddAzureFunctionsProject<Projects.ClaimFlow_Preparer>("s4-preparer")
 builder.AddAzureFunctionsProject<Projects.ClaimFlow_Filer>("s5-filer")
     .WithReference(serviceBus)
     .WaitFor(filerIn);
+
+// Blazor dashboard: starts runs (via the Comms HTTP trigger), reads the Cosmos
+// event log, charts metrics.
+builder.AddProject<Projects.ClaimFlow_Dashboard>("s6-dashboard")
+    .WithReference(comms)
+    .WithReference(cosmos)
+    .WithExternalHttpEndpoints()
+    .WaitFor(comms)
+    .WaitFor(events);
 
 builder.Build().Run();
