@@ -23,7 +23,7 @@ public class StarterFunction(ICommsService commsService, ClaimIntakeMetrics metr
             [CorrelationIdKey] = correlationId,
         });
 
-        metrics.EmailReceived.Add(1);
+        metrics.S1CommsReceived.Add(1);
 
         logger.LogInformation("S1-Comms: received email, CorrelationId generated");
 

@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using ClaimFlow.ServiceDefaults;
 using Microsoft.Extensions.Logging;
 
 namespace ClaimFlow.Comms;
@@ -12,7 +13,7 @@ public interface ICommsService
 // in only as message *data* (it has to ride the Service Bus app property); the log
 // lines below still pick up CorrelationId from the ambient scope the function opened
 // (AsyncLocal), NOT from the parameter — that's the plumbing being proven.
-public class CommsService(ILogger<CommsService> logger, ServiceBusClient serviceBusClient) : ICommsService
+public class CommsService(ILogger<CommsService> logger, ServiceBusClient serviceBusClient, ClaimIntakeMetrics metrics) : ICommsService
 {
     private const string CorrelationIdKey = "CorrelationId";
     private const string QueueName = "orchestrator-in";
@@ -20,6 +21,10 @@ public class CommsService(ILogger<CommsService> logger, ServiceBusClient service
     public async Task StartProcessAsync(string correlationId, CancellationToken ct = default)
     {
         logger.LogInformation("S1-Comms service: started process");
+
+        // Fake work.
+        await Task.Delay(Random.Shared.Next(200, 800), ct);
+        metrics.S1CommsProcessed.Add(1);
 
         // Publish the claim event to Tasks. CorrelationId rides as an application
         // property; the body is a tiny mock DTO. Trace context (traceparent) is added
@@ -33,6 +38,7 @@ public class CommsService(ILogger<CommsService> logger, ServiceBusClient service
             },
         };
         await sender.SendMessageAsync(message, ct);
+        metrics.S1CommsSent.Add(1);
 
         logger.LogInformation("S1-Comms service: published claim event to {Queue}", QueueName);
     }
