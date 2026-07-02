@@ -1,0 +1,22 @@
+# Minimal OTel Collector: receive OTLP metrics from the services and re-expose them
+# in Prometheus format at :8889/metrics for the Blazor dashboard to scrape.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Keep the OTel metric names as-is (dots -> underscores only).
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]

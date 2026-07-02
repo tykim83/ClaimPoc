@@ -5,6 +5,8 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ServiceDiscovery;
 using OpenTelemetry;
+using OpenTelemetry.Exporter;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using ClaimFlow.ServiceDefaults;
@@ -49,10 +51,22 @@ public static class Extensions
 
     public static TBuilder ConfigureOpenTelemetry<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
+        // Aspire injects the dashboard OTLP endpoint (OTEL_EXPORTER_OTLP_ENDPOINT).
+        // AppHost additionally injects COLLECTOR_OTLP_ENDPOINT into the metric-emitting
+        // services so their metrics also reach the collector (Prometheus for the UI).
+        // We wire OTLP per-signal (rather than UseOtlpExporter) so metrics can have a
+        // second destination while traces/logs still go only to the dashboard.
+        var useOtlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
+        var collectorEndpoint = builder.Configuration["COLLECTOR_OTLP_ENDPOINT"];
+
         builder.Logging.AddOpenTelemetry(logging =>
         {
             logging.IncludeFormattedMessage = true;
             logging.IncludeScopes = true;
+            if (useOtlp)
+            {
+                logging.AddOtlpExporter();
+            }
         });
 
         builder.Services.AddOpenTelemetry()
@@ -63,6 +77,23 @@ public static class Extensions
                     .AddRuntimeInstrumentation()
                     // Our custom meter (business checkpoint counters).
                     .AddMeter(ClaimFlow.ServiceDefaults.Telemetry.MeterName);
+
+                // Straight to the Aspire dashboard (env-configured endpoint/headers).
+                if (useOtlp)
+                {
+                    metrics.AddOtlpExporter();
+                }
+
+                // Extra metrics-only fan-out to the OTel Collector.
+                if (!string.IsNullOrWhiteSpace(collectorEndpoint))
+                {
+                    metrics.AddOtlpExporter(otlp =>
+                    {
+                        otlp.Endpoint = new Uri(collectorEndpoint);
+                        otlp.Protocol = OtlpExportProtocol.Grpc;
+                        otlp.Headers = string.Empty;
+                    });
+                }
             })
             .WithTracing(tracing =>
             {
@@ -73,31 +104,13 @@ public static class Extensions
                             !context.Request.Path.StartsWithSegments(HealthEndpointPath)
                             && !context.Request.Path.StartsWithSegments(AlivenessEndpointPath)
                     )
-                    // Uncomment the following line to enable gRPC instrumentation (requires the OpenTelemetry.Instrumentation.GrpcNetClient package)
-                    //.AddGrpcClientInstrumentation()
                     .AddHttpClientInstrumentation();
+
+                if (useOtlp)
+                {
+                    tracing.AddOtlpExporter();
+                }
             });
-
-        builder.AddOpenTelemetryExporters();
-
-        return builder;
-    }
-
-    private static TBuilder AddOpenTelemetryExporters<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
-    {
-        var useOtlpExporter = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
-
-        if (useOtlpExporter)
-        {
-            builder.Services.AddOpenTelemetry().UseOtlpExporter();
-        }
-
-        // Uncomment the following lines to enable the Azure Monitor exporter (requires the Azure.Monitor.OpenTelemetry.AspNetCore package)
-        //if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
-        //{
-        //    builder.Services.AddOpenTelemetry()
-        //       .UseAzureMonitor();
-        //}
 
         return builder;
     }

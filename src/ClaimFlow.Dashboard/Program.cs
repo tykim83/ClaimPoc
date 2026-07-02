@@ -1,3 +1,4 @@
+using ApexCharts;
 using ClaimFlow.Dashboard.Components;
 using ClaimFlow.Dashboard.Services;
 
@@ -18,6 +19,20 @@ builder.Services.AddHttpClient<ClaimStarter>(client =>
 });
 
 builder.Services.AddScoped<EventStore>();
+
+// Scrapes the OTel Collector's Prometheus endpoint (injected by AppHost) for the
+// metrics funnel. Base address is unset if the collector isn't wired — the client
+// then reports "not configured" rather than throwing.
+var collectorMetrics = builder.Configuration["COLLECTOR_METRICS_ENDPOINT"];
+builder.Services.AddHttpClient<MetricsClient>(client =>
+{
+    if (!string.IsNullOrWhiteSpace(collectorMetrics))
+    {
+        client.BaseAddress = new Uri(collectorMetrics);
+    }
+});
+
+builder.Services.AddApexCharts();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
