@@ -4,5 +4,8 @@
     <Project Path="src/ClaimFlow.Comms/ClaimFlow.Comms.csproj" />
     <Project Path="src/ClaimFlow.ServiceDefaults/ClaimFlow.ServiceDefaults.csproj" />
     <Project Path="src/ClaimFlow.Tasks/ClaimFlow.Tasks.csproj" />
+    <Project Path="src/ClaimFlow.Classifier/ClaimFlow.Classifier.csproj" />
+    <Project Path="src/ClaimFlow.Preparer/ClaimFlow.Preparer.csproj" />
+    <Project Path="src/ClaimFlow.Filer/ClaimFlow.Filer.csproj" />
   </Folder>
 </Solution>

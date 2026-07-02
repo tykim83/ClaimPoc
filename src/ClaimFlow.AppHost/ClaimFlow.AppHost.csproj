@@ -3,6 +3,9 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaimFlow.Comms\ClaimFlow.Comms.csproj" />
     <ProjectReference Include="..\ClaimFlow.Tasks\ClaimFlow.Tasks.csproj" />
+    <ProjectReference Include="..\ClaimFlow.Classifier\ClaimFlow.Classifier.csproj" />
+    <ProjectReference Include="..\ClaimFlow.Preparer\ClaimFlow.Preparer.csproj" />
+    <ProjectReference Include="..\ClaimFlow.Filer\ClaimFlow.Filer.csproj" />
   </ItemGroup>
 
   <ItemGroup>
