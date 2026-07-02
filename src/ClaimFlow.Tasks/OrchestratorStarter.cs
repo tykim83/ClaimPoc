@@ -1,6 +1,5 @@
 using Azure.Messaging.ServiceBus;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.Extensions.Logging;
 
@@ -44,11 +43,12 @@ public class OrchestratorStarter
 
         logger.LogInformation("S2-Tasks  starter: received claim event from Comms");
 
+        // instanceId (the orchestratorId) is durable-generated, distinct from the
+        // business correlationId which we pass as the orchestration input.
         var instanceId = await durableClient.ScheduleNewOrchestrationInstanceAsync(
             nameof(ClaimOrchestrator),
             correlationId,
-            new StartOrchestrationOptions(correlationId),
-            ct);
+            cancellation: ct);
 
         logger.LogInformation("S2-Tasks  starter: started orchestration {InstanceId}", instanceId);
     }
