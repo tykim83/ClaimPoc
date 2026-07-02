@@ -31,11 +31,6 @@ public class FilerFunction(IFilerService service, ClaimIntakeMetrics metrics)
         message.ApplicationProperties.TryGetValue(OrchestratorIdKey, out var oid);
         var orchestratorId = oid as string;
 
-        using var scope = logger.BeginScope(new Dictionary<string, object>
-        {
-            [CorrelationIdKey] = correlationId,
-        });
-
         metrics.S5FilerReceived.Add(1);
         logger.LogInformation("S5-Filer: received claim");
 

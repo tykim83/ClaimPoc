@@ -31,11 +31,6 @@ public class ClassifierFunction(IClassifierService service, ClaimIntakeMetrics m
         message.ApplicationProperties.TryGetValue(OrchestratorIdKey, out var oid);
         var orchestratorId = oid as string;
 
-        using var scope = logger.BeginScope(new Dictionary<string, object>
-        {
-            [CorrelationIdKey] = correlationId,
-        });
-
         metrics.S3ClassifierReceived.Add(1);
         logger.LogInformation("S3-Classifier: received claim");
 

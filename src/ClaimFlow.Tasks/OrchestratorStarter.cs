@@ -36,11 +36,6 @@ public class OrchestratorStarter
             return;
         }
 
-        using var scope = logger.BeginScope(new Dictionary<string, object>
-        {
-            [CorrelationIdKey] = correlationId,
-        });
-
         logger.LogInformation("S2-Tasks  starter: received claim event from Comms");
 
         // instanceId (the orchestratorId) is durable-generated, distinct from the

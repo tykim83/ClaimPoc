@@ -1,4 +1,5 @@
 using ClaimFlow.Preparer;
+using ClaimFlow.ServiceDefaults;
 using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Azure.Functions.Worker.OpenTelemetry;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,5 +15,7 @@ builder.AddAzureServiceBusClient("messaging");
 builder.Services.AddOpenTelemetry().UseFunctionsWorkerDefaults();
 
 builder.Services.AddSingleton<IPreparerService, PreparerService>();
+
+builder.UseMiddleware<CorrelationScopeMiddleware>();
 
 builder.Build().Run();

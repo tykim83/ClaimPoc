@@ -14,13 +14,22 @@ var preparerIn = serviceBus.AddServiceBusQueue("preparer-in");
 var filerIn = serviceBus.AddServiceBusQueue("filer-in");
 serviceBus.AddServiceBusQueue("orchestrator-responses");
 
+// Cosmos preview emulator: append-only event log, partition key = /correlationId.
+var cosmos = builder.AddAzureCosmosDB("cosmos")
+    .RunAsPreviewEmulator(emulator => emulator
+        .WithDataExplorer()
+        .WithLifetime(ContainerLifetime.Persistent));
+var events = cosmos.AddCosmosDatabase("claimflow").AddContainer("events", "/correlationId");
+
 builder.AddAzureFunctionsProject<Projects.ClaimFlow_Comms>("s1-comms")
     .WithReference(serviceBus)
     .WaitFor(orchestratorIn);
 
 builder.AddAzureFunctionsProject<Projects.ClaimFlow_Tasks>("s2-tasks")
     .WithReference(serviceBus)
-    .WaitFor(orchestratorIn);
+    .WithReference(cosmos)
+    .WaitFor(orchestratorIn)
+    .WaitFor(events);
 
 builder.AddAzureFunctionsProject<Projects.ClaimFlow_Classifier>("s3-classifier")
     .WithReference(serviceBus)

@@ -9,6 +9,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Azure.CosmosDB" Version="13.2.4" />
     <PackageReference Include="Aspire.Hosting.Azure.Functions" Version="13.2.4" />
     <PackageReference Include="Aspire.Hosting.Azure.ServiceBus" Version="13.2.4" />
   </ItemGroup>
@@ -19,6 +20,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UserSecretsId>984218bf-1608-4188-9e6b-67401ece16ea</UserSecretsId>
+    <!-- RunAsPreviewEmulator is an experimental API. -->
+    <NoWarn>$(NoWarn);ASPIRECOSMOSDB001</NoWarn>
   </PropertyGroup>
 
 </Project>

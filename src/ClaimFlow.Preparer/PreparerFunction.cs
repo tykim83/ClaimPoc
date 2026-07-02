@@ -31,11 +31,6 @@ public class PreparerFunction(IPreparerService service, ClaimIntakeMetrics metri
         message.ApplicationProperties.TryGetValue(OrchestratorIdKey, out var oid);
         var orchestratorId = oid as string;
 
-        using var scope = logger.BeginScope(new Dictionary<string, object>
-        {
-            [CorrelationIdKey] = correlationId,
-        });
-
         metrics.S4PreparerReceived.Add(1);
         logger.LogInformation("S4-Preparer: received claim");
 

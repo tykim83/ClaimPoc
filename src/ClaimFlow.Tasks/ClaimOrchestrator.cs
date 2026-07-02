@@ -24,20 +24,32 @@ public class ClaimOrchestrator
         });
 
         logger.LogInformation("S2-Tasks Orchestrator: started for claim");
+        await WriteEvent(context, "orchestration-started", correlationId, null);
 
-        // Sequential calls to each brick: send the request (via the activity — the only
-        // place I/O is allowed), then wait for the matching response event.
+        // Sequential calls to each brick: record the request, send it (via the activity —
+        // the only place I/O is allowed), then wait for the matching response event.
         foreach (var stage in Stages)
         {
+            await WriteEvent(context, $"{stage.ToLowerInvariant()}-requested", correlationId, stage);
+
             await context.CallActivityAsync(
                 nameof(SendToBrickActivity),
                 new BrickRequest(stage, correlationId, context.InstanceId));
 
             await context.WaitForExternalEvent<string>($"{stage}Done");
+            await WriteEvent(context, $"{stage.ToLowerInvariant()}-done", correlationId, stage);
             logger.LogInformation("S2-Tasks Orchestrator: {Stage} completed", stage);
         }
 
+        await WriteEvent(context, "all-done", correlationId, null);
         logger.LogInformation("S2-Tasks Orchestrator: all stages done");
+    }
+
+    private static Task WriteEvent(TaskOrchestrationContext context, string eventType, string correlationId, string? stage)
+    {
+        return context.CallActivityAsync(
+            nameof(WriteEventActivity),
+            new WriteEventInput(eventType, correlationId, context.InstanceId, stage));
     }
 }
 
