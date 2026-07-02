@@ -16,8 +16,10 @@ public class ClassifierService(ILogger<ClassifierService> logger, ServiceBusClie
     private const string CorrelationIdKey = "CorrelationId";
     private const string OrchestratorIdKey = "OrchestratorId";
     private const string StageKey = "Stage";
+    private const string StatusKey = "Status";
     private const string Stage = "Classifier";
     private const string ResponseQueue = "orchestrator-responses";
+    private const double SoftFailChance = 0.10;
 
     public async Task HandleAsync(string correlationId, string? orchestratorId, CancellationToken ct = default)
     {
@@ -25,7 +27,31 @@ public class ClassifierService(ILogger<ClassifierService> logger, ServiceBusClie
 
         // Fake work.
         await Task.Delay(Random.Shared.Next(200, 800), ct);
-        metrics.S3ClassifierProcessed.Add(1);
+
+        // "Poison" messages (~6%, decided by the claim id so the failure is stable across
+        // retries): always throw -> retried -> eventually dead-lettered. This claim's
+        // orchestration is left waiting.
+        if (correlationId[^1] == '0')
+        {
+            metrics.S3ClassifierFailed.Add(1);
+            logger.LogError("S3-Classifier service: poison message, will dead-letter after retries");
+            throw new InvalidOperationException("Simulated Classifier failure");
+        }
+
+        // ~10% soft failure: reported as Failed on the response so the orchestrator can
+        // stop the claim; otherwise Ok.
+        string status;
+        if (Random.Shared.NextDouble() < SoftFailChance)
+        {
+            metrics.S3ClassifierFailed.Add(1);
+            logger.LogWarning("S3-Classifier service: simulated soft failure");
+            status = "Failed";
+        }
+        else
+        {
+            metrics.S3ClassifierProcessed.Add(1);
+            status = "Ok";
+        }
 
         // Publish the response to the shared responses queue. CorrelationId (business id)
         // + OrchestratorId (durable instanceId, echoed back for RaiseEvent routing) + Stage
@@ -37,6 +63,7 @@ public class ClassifierService(ILogger<ClassifierService> logger, ServiceBusClie
             {
                 [CorrelationIdKey] = correlationId,
                 [StageKey] = Stage,
+                [StatusKey] = status,
             },
         };
         if (orchestratorId is not null)

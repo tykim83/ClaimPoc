@@ -19,13 +19,7 @@ public class ClassifierFunction(IClassifierService service, ClaimIntakeMetrics m
     {
         var logger = context.GetLogger<ClassifierFunction>();
 
-        message.ApplicationProperties.TryGetValue(CorrelationIdKey, out var cid);
-        var correlationId = cid as string;
-        if (correlationId is null)
-        {
-            logger.LogWarning("S3-Classifier: message has no CorrelationId, ignoring");
-            return;
-        }
+        var correlationId = (string)message.ApplicationProperties[CorrelationIdKey];
 
         // OrchestratorId is echoed straight back on the response so Tasks can route it.
         message.ApplicationProperties.TryGetValue(OrchestratorIdKey, out var oid);

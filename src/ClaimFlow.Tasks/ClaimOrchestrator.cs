@@ -36,7 +36,15 @@ public class ClaimOrchestrator
                 nameof(SendToBrickActivity),
                 new BrickRequest(stage, correlationId, context.InstanceId));
 
-            await context.WaitForExternalEvent<string>($"{stage}Done");
+            var status = await context.WaitForExternalEvent<string>($"{stage}Done");
+            if (status == "Failed")
+            {
+                // A stage soft-failed: stop here and mark the whole task failed.
+                await WriteEvent(context, "claim-failed", correlationId, stage);
+                logger.LogWarning("S2-Tasks Orchestrator: {Stage} failed, claim marked failed", stage);
+                return;
+            }
+
             await WriteEvent(context, $"{stage.ToLowerInvariant()}-done", correlationId, stage);
             logger.LogInformation("S2-Tasks Orchestrator: {Stage} completed", stage);
         }

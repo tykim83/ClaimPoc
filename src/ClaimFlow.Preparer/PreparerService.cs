@@ -16,8 +16,10 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
     private const string CorrelationIdKey = "CorrelationId";
     private const string OrchestratorIdKey = "OrchestratorId";
     private const string StageKey = "Stage";
+    private const string StatusKey = "Status";
     private const string Stage = "Preparer";
     private const string ResponseQueue = "orchestrator-responses";
+    private const double SoftFailChance = 0.10;
 
     public async Task HandleAsync(string correlationId, string? orchestratorId, CancellationToken ct = default)
     {
@@ -25,7 +27,31 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
 
         // Fake work.
         await Task.Delay(Random.Shared.Next(200, 800), ct);
-        metrics.S4PreparerProcessed.Add(1);
+
+        // "Poison" messages (~6%, decided by the claim id so the failure is stable across
+        // retries): always throw -> retried -> eventually dead-lettered. This claim's
+        // orchestration is left waiting.
+        if (correlationId[^1] == '0')
+        {
+            metrics.S4PreparerFailed.Add(1);
+            logger.LogError("S4-Preparer service: poison message, will dead-letter after retries");
+            throw new InvalidOperationException("Simulated Preparer failure");
+        }
+
+        // ~10% soft failure: reported as Failed on the response so the orchestrator can
+        // stop the claim; otherwise Ok.
+        string status;
+        if (Random.Shared.NextDouble() < SoftFailChance)
+        {
+            metrics.S4PreparerFailed.Add(1);
+            logger.LogWarning("S4-Preparer service: simulated soft failure");
+            status = "Failed";
+        }
+        else
+        {
+            metrics.S4PreparerProcessed.Add(1);
+            status = "Ok";
+        }
 
         // Publish the response to the shared responses queue. CorrelationId (business id)
         // + OrchestratorId (durable instanceId, echoed back for RaiseEvent routing) + Stage
@@ -37,6 +63,7 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
             {
                 [CorrelationIdKey] = correlationId,
                 [StageKey] = Stage,
+                [StatusKey] = status,
             },
         };
         if (orchestratorId is not null)
