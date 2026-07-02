@@ -6,10 +6,7 @@
     <header class="metrics-head" @onclick="Toggle">
         <span class="chevron @(expanded ? "open" : "")">▶</span>
         <span class="metrics-title">Pipeline metrics</span>
-        @if (snapshot is { Available: true })
-        {
-            <span class="muted metrics-sub">@snapshot.Funnel[0].Count started · @snapshot.Completed completed · @snapshot.Failed failed</span>
-        }
+        <span class="muted metrics-sub">the counters we emit (claimflow.*)</span>
         <button class="ghost metrics-refresh" @onclick="Refresh" @onclick:stopPropagation="true" disabled="@loading">
             @(loading ? "…" : "Refresh")
         </button>
@@ -26,66 +23,44 @@
             {
                 <p class="muted">Metrics unavailable: @snapshot.Error</p>
             }
+            else if (snapshot.Points.Count == 0)
+            {
+                <p class="muted">No metrics yet — start a run.</p>
+            }
             else
             {
-                <div class="charts">
-                    <div class="chart-box">
-                        <h3>Stage funnel</h3>
-                        <p class="muted small">Each stage only receives what the previous one forwarded — a step down is where claims were lost.</p>
-                        <ApexChart @key="@version" TItem="FunnelStage" Options="funnelOptions" Height="230">
-                            <ApexPointSeries TItem="FunnelStage"
-                                             Items="snapshot.Funnel"
-                                             Name="Claims"
-                                             XValue="@(s => s.Stage)"
-                                             YValue="@(s => (decimal)s.Count)"
-                                             SeriesType="SeriesType.Bar" />
-                        </ApexChart>
-                    </div>
-
-                    <div class="chart-box">
-                        <h3>Outcome</h3>
-                        <p class="muted small">Completed vs failed. The gap to "started" is silent loss.</p>
-                        <ApexChart @key="@version" TItem="Slice" Options="donutOptions" Height="230">
-                            <ApexPointSeries TItem="Slice"
-                                             Items="Slices"
-                                             Name="Claims"
-                                             XValue="@(s => s.Label)"
-                                             YValue="@(s => (decimal)s.Value)"
-                                             SeriesType="SeriesType.Donut" />
-                        </ApexChart>
-                    </div>
-                </div>
+                <p class="muted small">Each stage's counters side by side. A stage receiving fewer than the one before it (or a rising "failed") is where claims dropped.</p>
+                <ApexChart @key="@version" TItem="MetricPoint" Options="options" Height="320">
+                    @foreach (var measure in snapshot.Measures)
+                    {
+                        <ApexPointSeries TItem="MetricPoint"
+                                         Items="@snapshot.Points.Where(p => p.Measure == measure)"
+                                         Name="@Cap(measure)"
+                                         XValue="@(p => Cap(p.Stage))"
+                                         YValue="@(p => (decimal)p.Value)"
+                                         SeriesType="SeriesType.Bar" />
+                    }
+                </ApexChart>
             }
         </div>
     }
 </section>
 
 @code {
-    private record Slice(string Label, long Value);
-
     private bool expanded = true;
     private bool loading;
     private int version;
     private MetricsSnapshot? snapshot;
 
-    private IEnumerable<Slice> Slices => snapshot is null
-        ? []
-        : [new("Completed", snapshot.Completed), new("Failed", snapshot.Failed)];
-
-    private readonly ApexChartOptions<FunnelStage> funnelOptions = new()
+    // received / sent / processed / failed — in that order.
+    private readonly ApexChartOptions<MetricPoint> options = new()
     {
-        PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { Horizontal = true, BorderRadius = 4 } },
-        DataLabels = new DataLabels { Enabled = true },
-        Colors = ["#4f46e5"],
         Chart = new Chart { Toolbar = new Toolbar { Show = false } },
-        Grid = new Grid { BorderColor = "#eef1f5" },
-    };
-
-    private readonly ApexChartOptions<Slice> donutOptions = new()
-    {
-        Colors = ["#15a34a", "#e0322f"],
+        PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { Horizontal = false, BorderRadius = 3, ColumnWidth = "65%" } },
         Legend = new Legend { Position = LegendPosition.Bottom },
-        Chart = new Chart { Toolbar = new Toolbar { Show = false } },
+        DataLabels = new DataLabels { Enabled = false },
+        Colors = ["#4f46e5", "#0ea5e9", "#15a34a", "#e0322f"],
+        Grid = new Grid { BorderColor = "#eef1f5" },
     };
 
     protected override Task OnInitializedAsync() => Refresh();
@@ -99,4 +74,6 @@
         version++;
         loading = false;
     }
+
+    private static string Cap(string s) => string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s[1..];
 }
