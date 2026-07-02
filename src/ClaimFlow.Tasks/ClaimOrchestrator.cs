@@ -39,8 +39,8 @@ public class ClaimOrchestrator
             var status = await context.WaitForExternalEvent<string>($"{stage}Done");
             if (status == "Failed")
             {
-                // A stage soft-failed: stop here and mark the whole task failed.
-                await WriteEvent(context, "claim-failed", correlationId, stage);
+                // A stage soft-failed: stop here and close the claim with a failed terminal event.
+                await WriteEvent(context, "process-completed", correlationId, stage, "Failed");
                 logger.LogWarning("S2-Tasks Orchestrator: {Stage} failed, claim marked failed", stage);
                 return;
             }
@@ -49,15 +49,17 @@ public class ClaimOrchestrator
             logger.LogInformation("S2-Tasks Orchestrator: {Stage} completed", stage);
         }
 
-        await WriteEvent(context, "all-done", correlationId, null);
+        await WriteEvent(context, "process-completed", correlationId, null, "Success");
         logger.LogInformation("S2-Tasks Orchestrator: all stages done");
     }
 
-    private static Task WriteEvent(TaskOrchestrationContext context, string eventType, string correlationId, string? stage)
+    // Every event is "Success" except the terminal process-completed event, which
+    // carries Success or Failed.
+    private static Task WriteEvent(TaskOrchestrationContext context, string eventType, string correlationId, string? stage, string status = "Success")
     {
         return context.CallActivityAsync(
             nameof(WriteEventActivity),
-            new WriteEventInput(eventType, correlationId, context.InstanceId, stage));
+            new WriteEventInput(eventType, correlationId, context.InstanceId, stage, status));
     }
 }
 

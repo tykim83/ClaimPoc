@@ -17,6 +17,8 @@ builder.Services.AddHttpClient<ClaimStarter>(client =>
     client.BaseAddress = new Uri("http://s1-comms");
 });
 
+builder.Services.AddScoped<EventStore>();
+
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 

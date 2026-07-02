@@ -1,0 +1,231 @@
+@page "/"
+@using ClaimFlow.Dashboard.Services
+@using Microsoft.AspNetCore.Components.Web
+@inject ClaimStarter Starter
+@inject EventStore Store
+@inject IJSRuntime JS
+@rendermode InteractiveServer
+@implements IDisposable
+
+<PageTitle>ClaimFlow</PageTitle>
+
+<header class="topbar">
+    <span class="brand">ClaimFlow</span>
+
+    <div class="topbar-actions">
+        <input class="count" type="number" min="1" max="1000" @bind="count" title="How many claims to start" />
+        <button @onclick="StartRuns" disabled="@starting">@(starting ? "Starting…" : "Start process")</button>
+        <button class="btn-danger" @onclick="ClearDb" disabled="@clearing">@(clearing ? "Clearing…" : "Clear DB")</button>
+    </div>
+</header>
+
+@if (banner is not null)
+{
+    <div class="toast @bannerKind">@banner</div>
+}
+
+<main>
+    <div class="controls">
+        <label class="field">
+            <span>CorrelationId</span>
+            <input placeholder="search…" @bind="correlationId" @bind:event="oninput" @onkeyup="OnKey" />
+        </label>
+
+        <label class="field">
+            <span>Event type</span>
+            <select @bind="eventType" @bind:after="Load">
+                <option value="">All</option>
+                @foreach (var t in EventTypes)
+                {
+                    <option value="@t">@t</option>
+                }
+            </select>
+        </label>
+
+        <label class="field">
+            <span>Status</span>
+            <select @bind="status" @bind:after="Load">
+                <option value="">All</option>
+                <option value="Success">Success</option>
+                <option value="Failed">Failed</option>
+            </select>
+        </label>
+
+        <button @onclick="Load" disabled="@loading">@(loading ? "Loading…" : "Apply")</button>
+
+        @if (items is not null)
+        {
+            <span class="muted">@count_events event(s)</span>
+        }
+    </div>
+
+    @if (error is not null)
+    {
+        <p class="pill fail">@error</p>
+    }
+
+    @if (items is not null && count_events == 0)
+    {
+        <div class="empty">No events yet. Enter a number and hit <strong>Start process</strong> to generate some.</div>
+    }
+    else if (items is not null)
+    {
+        <div class="grid-wrap">
+            <QuickGrid Items="@items" Pagination="@pagination" Class="events-grid">
+                <PropertyColumn Property="@(e => e.timestamp)" Title="Time (UTC)" Format="HH:mm:ss.fff" Sortable="true" />
+                <PropertyColumn Property="@(e => e.eventType)" Title="Event" Sortable="true" />
+                <TemplateColumn Title="Status" Sortable="true" SortBy="@statusSort">
+                    <span class="pill @(context.status == "Failed" ? "fail" : "ok")">@context.status</span>
+                </TemplateColumn>
+                <PropertyColumn Property="@(e => e.stage)" Title="Stage" Sortable="true" />
+                <TemplateColumn Title="CorrelationId">
+                    <code>@context.correlationId</code>
+                </TemplateColumn>
+            </QuickGrid>
+        </div>
+
+        <Paginator State="@pagination" />
+    }
+</main>
+
+@code {
+    private const int LatestLimit = 500;
+
+    // Top bar
+    private int count = 1;
+    private bool starting;
+    private bool clearing;
+    private string? banner;
+    private string bannerKind = "ok";
+
+    // Grid + filters
+    private static readonly string[] EventTypes =
+    [
+        "orchestration-started",
+        "classifier-requested", "classifier-done",
+        "preparer-requested", "preparer-done",
+        "filer-requested", "filer-done",
+        "process-completed",
+    ];
+
+    private string correlationId = "";
+    private string status = "";
+    private string eventType = "";
+    private bool loading;
+    private string? error;
+    private int count_events;
+
+    private IQueryable<EventDoc>? items;
+    private readonly PaginationState pagination = new() { ItemsPerPage = 15 };
+    private readonly GridSort<EventDoc> statusSort = GridSort<EventDoc>.ByAscending(e => e.status);
+
+    protected override Task OnInitializedAsync() => Load();
+
+    private async Task StartRuns()
+    {
+        banner = null;
+        count = Math.Clamp(count, 1, 1000);
+        starting = true;
+        try
+        {
+            var sent = await Starter.StartAsync(count);
+            SetBanner($"Started {sent} run(s).", "ok");
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            SetBanner($"Start failed: {ex.Message}", "fail");
+        }
+        finally
+        {
+            starting = false;
+        }
+    }
+
+    private async Task ClearDb()
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", "Delete ALL events from Cosmos? This cannot be undone."))
+        {
+            return;
+        }
+
+        banner = null;
+        clearing = true;
+        try
+        {
+            var deleted = await Store.ClearAllAsync();
+            SetBanner($"Cleared {deleted} event(s).", "ok");
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            SetBanner($"Clear failed: {ex.Message}", "fail");
+        }
+        finally
+        {
+            clearing = false;
+        }
+    }
+
+    private CancellationTokenSource? bannerCts;
+
+    private void SetBanner(string text, string kind)
+    {
+        banner = text;
+        bannerKind = kind;
+
+        bannerCts?.Cancel();
+        bannerCts = new CancellationTokenSource();
+        _ = ClearBannerAfterDelay(bannerCts.Token);
+    }
+
+    private async Task ClearBannerAfterDelay(CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(4), token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        banner = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => bannerCts?.Cancel();
+
+    private async Task Load()
+    {
+        error = null;
+        loading = true;
+        try
+        {
+            var results = await Store.QueryAsync(
+                correlationId.Trim(),
+                string.IsNullOrWhiteSpace(status) ? null : status,
+                string.IsNullOrWhiteSpace(eventType) ? null : eventType,
+                LatestLimit);
+
+            count_events = results.Count;
+            items = results.AsQueryable();
+            await pagination.SetCurrentPageIndexAsync(0);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await Load();
+        }
+    }
+}
