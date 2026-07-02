@@ -1,20 +1,39 @@
+using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 
 namespace ClaimFlow.Comms;
 
 public interface ICommsService
 {
-    void StartProcess();
+    Task StartProcessAsync(string correlationId, CancellationToken ct = default);
 }
 
-// Injected service. It gets its ILogger purely via DI and is NEVER handed the
-// CorrelationId. If the id shows up on its log line, it flowed in via the log
-// scope the function opened (AsyncLocal in the logging scope provider) — even
-// though the function's logger came from FunctionContext and this one from DI.
-public class CommsService(ILogger<CommsService> logger) : ICommsService
+// Injected service. Its ILogger comes purely from DI. The CorrelationId is passed
+// in only as message *data* (it has to ride the Service Bus app property); the log
+// lines below still pick up CorrelationId from the ambient scope the function opened
+// (AsyncLocal), NOT from the parameter — that's the plumbing being proven.
+public class CommsService(ILogger<CommsService> logger, ServiceBusClient serviceBusClient) : ICommsService
 {
-    public void StartProcess()
+    private const string CorrelationIdKey = "CorrelationId";
+    private const string QueueName = "orchestrator-in";
+
+    public async Task StartProcessAsync(string correlationId, CancellationToken ct = default)
     {
-        logger.LogInformation("Comms service: started process (no CorrelationId passed to me)");
+        logger.LogInformation("S1-Comms service: started process");
+
+        // Publish the claim event to Tasks. CorrelationId rides as an application
+        // property; the body is a tiny mock DTO. Trace context (traceparent) is added
+        // automatically by Azure.Messaging.ServiceBus instrumentation.
+        var sender = serviceBusClient.CreateSender(QueueName);
+        var message = new ServiceBusMessage(BinaryData.FromObjectAsJson(new { claimId = correlationId }))
+        {
+            ApplicationProperties =
+            {
+                [CorrelationIdKey] = correlationId,
+            },
+        };
+        await sender.SendMessageAsync(message, ct);
+
+        logger.LogInformation("S1-Comms service: published claim event to {Queue}", QueueName);
     }
 }

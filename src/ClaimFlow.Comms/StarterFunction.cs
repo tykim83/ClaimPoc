@@ -11,7 +11,7 @@ public class StarterFunction(ICommsService commsService, ClaimIntakeMetrics metr
     private const string CorrelationIdKey = "CorrelationId";
 
     [Function("Starter")]
-    public HttpResponseData Run(
+    public async Task<HttpResponseData> Run(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post")] HttpRequestData req,
         FunctionContext context)
     {
@@ -25,11 +25,12 @@ public class StarterFunction(ICommsService commsService, ClaimIntakeMetrics metr
 
         metrics.EmailReceived.Add(1);
 
-        logger.LogInformation("Comms function: received email, CorrelationId generated");
-        commsService.StartProcess();
+        logger.LogInformation("S1-Comms: received email, CorrelationId generated");
+
+        await commsService.StartProcessAsync(correlationId);
 
         var response = req.CreateResponse(HttpStatusCode.OK);
-        response.WriteString(correlationId);
+        await response.WriteStringAsync(correlationId);
         return response;
     }
 }

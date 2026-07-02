@@ -3,5 +3,6 @@
     <Project Path="src/ClaimFlow.AppHost/ClaimFlow.AppHost.csproj" />
     <Project Path="src/ClaimFlow.Comms/ClaimFlow.Comms.csproj" />
     <Project Path="src/ClaimFlow.ServiceDefaults/ClaimFlow.ServiceDefaults.csproj" />
+    <Project Path="src/ClaimFlow.Tasks/ClaimFlow.Tasks.csproj" />
   </Folder>
 </Solution>

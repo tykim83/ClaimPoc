@@ -2,10 +2,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaimFlow.Comms\ClaimFlow.Comms.csproj" />
+    <ProjectReference Include="..\ClaimFlow.Tasks\ClaimFlow.Tasks.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.Azure.Functions" Version="13.2.4" />
+    <PackageReference Include="Aspire.Hosting.Azure.ServiceBus" Version="13.2.4" />
   </ItemGroup>
 
   <PropertyGroup>
