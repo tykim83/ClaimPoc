@@ -65,7 +65,7 @@ public class ClaimOrchestrator
 
 // Activity: the only place that does I/O (publishes the brick request). It re-opens the
 // CorrelationId scope from its input, since activities are separate invocations.
-public class SendToBrickActivity(ServiceBusClient serviceBusClient, ILogger<SendToBrickActivity> logger)
+public class SendToBrickActivity(ServiceBusSenderCache senders, ILogger<SendToBrickActivity> logger)
 {
     private const string CorrelationIdKey = "CorrelationId";
     private const string OrchestratorIdKey = "OrchestratorId";
@@ -79,7 +79,7 @@ public class SendToBrickActivity(ServiceBusClient serviceBusClient, ILogger<Send
         });
 
         var queue = $"{req.Stage.ToLowerInvariant()}-in";
-        var sender = serviceBusClient.CreateSender(queue);
+        var sender = senders.Get(queue);
         var message = new ServiceBusMessage(BinaryData.FromObjectAsJson(new { claimId = req.CorrelationId }))
         {
             ApplicationProperties =

@@ -1,4 +1,5 @@
 using ClaimFlow.ServiceDefaults;
+using ClaimFlow.Tasks;
 using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Azure.Functions.Worker.OpenTelemetry;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +14,9 @@ builder.AddAzureServiceBusClient("messaging");
 
 // Cosmos client for the append-only event log (partition key = /correlationId).
 builder.AddAzureCosmosClient("cosmos");
+
+// Reused ServiceBus senders (activities are transient — see ServiceBusSenderCache).
+builder.Services.AddSingleton<ServiceBusSenderCache>();
 
 // Integrate the isolated worker's telemetry with the Functions host pipeline:
 // registers the worker ActivitySource (function/service work -> child spans in

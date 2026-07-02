@@ -21,6 +21,10 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
     private const string ResponseQueue = "orchestrator-responses";
     private const double SoftFailChance = 0.10;
 
+    // One sender, reused for the singleton's lifetime. Creating a sender per message opens
+    // a new AMQP link every time and leaks handles -> QuotaExceeded (max 199/connection).
+    private readonly ServiceBusSender _sender = serviceBusClient.CreateSender(ResponseQueue);
+
     public async Task HandleAsync(string correlationId, string? orchestratorId, CancellationToken ct = default)
     {
         logger.LogInformation("S4-Preparer service: started process");
@@ -56,7 +60,6 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
         // Publish the response to the shared responses queue. CorrelationId (business id)
         // + OrchestratorId (durable instanceId, echoed back for RaiseEvent routing) + Stage
         // ride as app properties.
-        var sender = serviceBusClient.CreateSender(ResponseQueue);
         var message = new ServiceBusMessage(BinaryData.FromObjectAsJson(new { claimId = correlationId }))
         {
             ApplicationProperties =
@@ -70,7 +73,7 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
         {
             message.ApplicationProperties[OrchestratorIdKey] = orchestratorId;
         }
-        await sender.SendMessageAsync(message, ct);
+        await _sender.SendMessageAsync(message, ct);
         metrics.S4PreparerSent.Add(1);
 
         logger.LogInformation("S4-Preparer service: published response to {Queue}", ResponseQueue);
