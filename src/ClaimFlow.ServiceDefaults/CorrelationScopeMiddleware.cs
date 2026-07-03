@@ -5,9 +5,15 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaimFlow.ServiceDefaults;
 
-// Opens a CorrelationId log scope around every Service Bus-triggered function, so entry
-// points don't repeat the BeginScope boilerplate. The trigger exposes the message's
-// application properties as a JSON string in the binding data; we read our key from there.
+// Opens a CorrelationId log scope around every function invocation that carries one,
+// so entry points don't repeat the BeginScope boilerplate. Service Bus triggers carry
+// the id in the message's application properties; activity triggers carry it inside
+// their serialized input. Both surface in the binding data as JSON strings, so we
+// scan any JSON object there for a top-level CorrelationId.
+//
+// Durable triggers also expose the instanceId, and by convention orchestrations are
+// started with instanceId = correlationId — so when no JSON carries the id (the
+// orchestrator itself, activities with plain inputs), the instanceId is the fallback.
 public class CorrelationScopeMiddleware(ILogger<CorrelationScopeMiddleware> logger) : IFunctionsWorkerMiddleware
 {
     private const string CorrelationIdKey = "CorrelationId";
@@ -29,24 +35,47 @@ public class CorrelationScopeMiddleware(ILogger<CorrelationScopeMiddleware> logg
 
     private static string? TryFindCorrelationId(FunctionContext context)
     {
-        if (!context.BindingContext.BindingData.TryGetValue("ApplicationProperties", out var raw)
-            || raw is not string json)
+        foreach (var value in context.BindingContext.BindingData.Values)
         {
-            return null;
+            if (value is not string s || !s.StartsWith('{'))
+            {
+                continue;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(s);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    // case-insensitive: the durable serializer may camelCase the input
+                    if (prop.Value.ValueKind == JsonValueKind.String
+                        && string.Equals(prop.Name, CorrelationIdKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return prop.Value.GetString();
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // a string that merely looks like JSON, skip it
+            }
         }
 
-        try
+        // durable fallback: instanceId = correlationId by convention
+        foreach (var kv in context.BindingContext.BindingData)
         {
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty(CorrelationIdKey, out var value)
-                && value.ValueKind == JsonValueKind.String
-                    ? value.GetString()
-                    : null;
+            if (string.Equals(kv.Key, "instanceId", StringComparison.OrdinalIgnoreCase)
+                && kv.Value is string instanceId && instanceId.Length > 0)
+            {
+                return instanceId;
+            }
         }
-        catch (JsonException)
-        {
-            return null;
-        }
+
+        return null;
     }
 }

@@ -8,7 +8,6 @@ namespace ClaimFlow.Filer;
 public class FilerFunction(IFilerService service, ClaimIntakeMetrics metrics)
 {
     private const string CorrelationIdKey = "CorrelationId";
-    private const string OrchestratorIdKey = "OrchestratorId";
     private const string QueueName = "filer-in";
 
     [Function("FilerFunction")]
@@ -21,13 +20,26 @@ public class FilerFunction(IFilerService service, ClaimIntakeMetrics metrics)
 
         var correlationId = (string)message.ApplicationProperties[CorrelationIdKey];
 
-        // OrchestratorId is echoed straight back on the response so Tasks can route it.
-        message.ApplicationProperties.TryGetValue(OrchestratorIdKey, out var oid);
-        var orchestratorId = oid as string;
+        // count the claim once, not once per redelivery
+        if (message.DeliveryCount == 1)
+        {
+            metrics.S5FilerReceived.Add(1);
+        }
 
-        metrics.S5FilerReceived.Add(1);
         logger.LogInformation("S5-Filer: received claim");
 
-        await service.HandleAsync(correlationId, orchestratorId, ct);
+        await service.HandleAsync(correlationId, ct);
+    }
+
+    // Fires when a message lands in this queue's DLQ: a claim we lost. Counting the
+    // actual DLQ arrival (instead of guessing from the failing handler) gives exactly
+    // one per lost claim, no matter how many retries it took to get here.
+    [Function("FilerDeadLetter")]
+    public void DeadLetter(
+        [ServiceBusTrigger(QueueName + "/$deadletterqueue", Connection = "messaging")] ServiceBusReceivedMessage message,
+        FunctionContext context)
+    {
+        metrics.S5FilerDeadLettered.Add(1);
+        context.GetLogger<FilerFunction>().LogError("S5-Filer: claim dead-lettered");
     }
 }

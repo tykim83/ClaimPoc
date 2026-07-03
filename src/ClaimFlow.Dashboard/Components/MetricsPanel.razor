@@ -32,13 +32,13 @@
             }
             else
             {
-                <p class="muted small">Each stage's counters side by side. A stage receiving fewer than the one before it (or a rising "failed") is where claims dropped.</p>
+                <p class="muted small">Received counts each claim once (retries not recounted). Failed = handled failures, the claim was closed properly. Dead-lettered = silently lost; that bar being non-zero is the alarm.</p>
                 <ApexChart @key="@version" TItem="MetricPoint" Options="options" Height="320">
-                    @foreach (var measure in snapshot.Measures)
+                    @foreach (var measure in AllMeasures)
                     {
                         <ApexPointSeries TItem="MetricPoint"
                                          Items="@Series(measure)"
-                                         Name="@Cap(measure)"
+                                         Name="@MeasureLabel(measure)"
                                          XValue="@(p => Label(p.Stage))"
                                          YValue="@(p => (decimal)p.Value)"
                                          SeriesType="SeriesType.Bar" />
@@ -48,10 +48,10 @@
                 @if (BrickLoss() is { Count: > 0 } losses)
                 {
                     <div class="dlq-strip">
-                        <span class="muted small dlq-label">Events lost per brick = entered − responded (retry-proof: counts claims, not delivery attempts):</span>
+                        <span class="muted small dlq-label">Dead-lettered per brick (claims that entered and never responded):</span>
                         @foreach (var (brick, lost) in losses)
                         {
-                            <span class="pill @(lost > 0 ? "fail" : "ok")">@Cap(brick): @lost lost</span>
+                            <span class="pill @(lost > 0 ? "fail" : "ok")">@Cap(brick): @lost</span>
                         }
                     </div>
                 }
@@ -66,14 +66,18 @@
     private int version;
     private MetricsSnapshot? snapshot;
 
-    // received / sent / processed / failed — in that order.
+    // Always render the same five series in the same order, zero-filled when a counter
+    // hasn't fired yet. Series and Colors are matched by position, so a measure missing
+    // from the scrape would otherwise shift the colors (e.g. dead-lettered turning amber).
+    private static readonly string[] AllMeasures = ["received", "sent", "processed", "failed", "deadlettered"];
+
     private readonly ApexChartOptions<MetricPoint> options = new()
     {
         Chart = new Chart { Toolbar = new Toolbar { Show = false } },
         PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { Horizontal = false, BorderRadius = 3, ColumnWidth = "65%" } },
         Legend = new Legend { Position = LegendPosition.Bottom },
         DataLabels = new DataLabels { Enabled = false },
-        Colors = ["#4f46e5", "#0ea5e9", "#15a34a", "#e0322f"],
+        Colors = ["#4f46e5", "#0ea5e9", "#15a34a", "#f59e0b", "#e0322f"],
         Grid = new Grid { BorderColor = "#eef1f5" },
     };
 
@@ -137,28 +141,19 @@
         return order.Select(stage => new MetricPoint(stage, measure, byStage.GetValueOrDefault(stage)));
     }
 
-    // Retry-proof loss per brick. received/failed count every delivery, so redeliveries
-    // inflate them; but "how many a stage forwarded" and "how many a brick responded to"
-    // each count a claim ONCE. So: entered = the upstream stage's forwarded count (tasks
-    // started, or the previous brick's processed/Ok), responded = this brick's sent.
-    // entered − responded = claims that went in and never came out (dead-lettered / stuck),
-    // independent of how many times each was retried.
-    private static readonly (string Brick, string UpstreamStage, string UpstreamMeasure)[] Flow =
-    [
-        ("classifier", "tasks", "received"),
-        ("preparer", "classifier", "processed"),
-        ("filer", "preparer", "processed"),
-    ];
-
+    // Each brick counts its own DLQ arrivals (one per lost claim), so this is a direct
+    // read — no cross-stage math, no retry noise.
     private List<(string Brick, long Lost)> BrickLoss() =>
-        Flow.Where(f => snapshot!.Stages.Contains(f.Brick))
-            .Select(f => (f.Brick, Math.Max(0, Val(f.UpstreamStage, f.UpstreamMeasure) - Val(f.Brick, "sent"))))
-            .ToList();
+        Bricks.Where(b => snapshot!.Stages.Contains(b))
+              .Select(b => (b, Val(b, "deadlettered")))
+              .ToList();
 
     private long Val(string stage, string measure) =>
         snapshot!.Points.FirstOrDefault(p => p.Stage == stage && p.Measure == measure)?.Value ?? 0;
 
     private static string Label(string stage) => stage == Spacer ? Spacer : Cap(stage);
+
+    private static string MeasureLabel(string measure) => measure == "deadlettered" ? "Dead-lettered" : Cap(measure);
 
     private static string Cap(string s) => string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s[1..];
 }

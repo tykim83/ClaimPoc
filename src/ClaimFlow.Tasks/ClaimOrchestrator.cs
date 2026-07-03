@@ -6,23 +6,19 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaimFlow.Tasks;
 
-public record BrickRequest(string Stage, string CorrelationId, string OrchestratorId);
+public record BrickRequest(string Stage, string CorrelationId);
 
 public class ClaimOrchestrator
 {
-    private const string CorrelationIdKey = "CorrelationId";
     private static readonly string[] Stages = ["Classifier", "Preparer", "Filer"];
 
     [Function(nameof(ClaimOrchestrator))]
     public async Task Run([OrchestrationTrigger] TaskOrchestrationContext context)
     {
-        var correlationId = context.GetInput<string>()!;
+        // instanceId IS the correlationId (the starter sets it), so the middleware
+        // opens the log scope here too — no BeginScope even in the orchestrator.
+        var correlationId = context.InstanceId;
         var logger = context.CreateReplaySafeLogger<ClaimOrchestrator>();
-
-        using var scope = logger.BeginScope(new Dictionary<string, object>
-        {
-            [CorrelationIdKey] = correlationId,
-        });
 
         logger.LogInformation("S2-Tasks Orchestrator: started for claim");
         await WriteEvent(context, "orchestration-started", correlationId, null);
@@ -34,7 +30,7 @@ public class ClaimOrchestrator
 
             await context.CallActivityAsync(
                 nameof(SendToBrickActivity),
-                new BrickRequest(stage, correlationId, context.InstanceId));
+                new BrickRequest(stage, correlationId));
 
             var status = await context.WaitForExternalEvent<string>($"{stage}Done");
             if (status == "Failed")
@@ -61,25 +57,19 @@ public class ClaimOrchestrator
     {
         return context.CallActivityAsync(
             nameof(WriteEventActivity),
-            new WriteEventInput(eventType, correlationId, context.InstanceId, stage, status));
+            new WriteEventInput(eventType, correlationId, stage, status));
     }
 }
 
-// Publishes the brick request. Activities are separate invocations, so the
-// CorrelationId scope is re-opened here from the input.
+// Publishes the brick request. The CorrelationId scope comes from the middleware,
+// which finds the id inside the activity's input.
 public class SendToBrickActivity(ServiceBusSenderCache senders, ILogger<SendToBrickActivity> logger)
 {
     private const string CorrelationIdKey = "CorrelationId";
-    private const string OrchestratorIdKey = "OrchestratorId";
 
     [Function(nameof(SendToBrickActivity))]
     public async Task Run([ActivityTrigger] BrickRequest req)
     {
-        using var scope = logger.BeginScope(new Dictionary<string, object>
-        {
-            [CorrelationIdKey] = req.CorrelationId,
-        });
-
         var queue = $"{req.Stage.ToLowerInvariant()}-in";
         var sender = senders.Get(queue);
         var message = new ServiceBusMessage(BinaryData.FromObjectAsJson(new { claimId = req.CorrelationId }))
@@ -87,7 +77,6 @@ public class SendToBrickActivity(ServiceBusSenderCache senders, ILogger<SendToBr
             ApplicationProperties =
             {
                 [CorrelationIdKey] = req.CorrelationId,
-                [OrchestratorIdKey] = req.OrchestratorId,
             },
         };
         await sender.SendMessageAsync(message);

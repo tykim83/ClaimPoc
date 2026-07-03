@@ -1,6 +1,7 @@
 using Azure.Messaging.ServiceBus;
 using ClaimFlow.ServiceDefaults;
 using Microsoft.Azure.Functions.Worker;
+using Microsoft.DurableTask;
 using Microsoft.DurableTask.Client;
 using Microsoft.Extensions.Logging;
 
@@ -34,12 +35,15 @@ public class OrchestratorStarter(ClaimIntakeMetrics metrics)
         logger.LogInformation("S2-Tasks  starter: received claim event from Comms");
         metrics.S2TasksReceived.Add(1);
 
-        // instanceId (the orchestratorId) is durable-generated, distinct from the
-        // business correlationId which we pass as the orchestration input.
+        // instanceId = correlationId, one id for the whole journey. Durable exposes the
+        // instanceId to the middleware on every orchestrator/activity invocation, so log
+        // scopes come for free there too — and a duplicate claim event can't start a
+        // second orchestration for the same claim.
         var instanceId = await durableClient.ScheduleNewOrchestrationInstanceAsync(
             nameof(ClaimOrchestrator),
-            correlationId,
-            cancellation: ct);
+            input: null,
+            new StartOrchestrationOptions { InstanceId = correlationId },
+            ct);
 
         logger.LogInformation("S2-Tasks  starter: started orchestration {InstanceId}", instanceId);
     }

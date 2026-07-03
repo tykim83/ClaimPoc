@@ -10,7 +10,6 @@ public record EventDoc(
     string eventType,
     string? status,
     string? stage,
-    string? orchestratorId,
     string? traceId,
     DateTime timestamp);
 

@@ -19,7 +19,7 @@ public class MetricsClient(HttpClient httpClient, MetricsBaseline baseline)
 {
     private const string Prefix = "claimflow_";
     private static readonly string[] StageOrder = ["comms", "tasks", "classifier", "preparer", "filer"];
-    private static readonly string[] MeasureOrder = ["received", "sent", "processed", "failed"];
+    private static readonly string[] MeasureOrder = ["received", "sent", "processed", "failed", "deadlettered"];
 
     public bool Configured => httpClient.BaseAddress is not null;
 
