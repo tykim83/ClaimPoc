@@ -5,7 +5,6 @@ namespace ClaimFlow.ServiceDefaults;
 public sealed class ClaimIntakeMetrics
 {
     public Counter<long> S1CommsReceived { get; }
-    public Counter<long> S1CommsSent { get; }
     public Counter<long> S1CommsProcessed { get; }
 
     public Counter<long> S2TasksReceived { get; }
@@ -32,7 +31,6 @@ public sealed class ClaimIntakeMetrics
         var meter = meterFactory.Create(Telemetry.MeterName);
 
         S1CommsReceived = meter.CreateCounter<long>(Telemetry.Metrics.S1CommsReceived, description: "Claims received by Comms.");
-        S1CommsSent = meter.CreateCounter<long>(Telemetry.Metrics.S1CommsSent, description: "Claim events sent by Comms.");
         S1CommsProcessed = meter.CreateCounter<long>(Telemetry.Metrics.S1CommsProcessed, description: "Claims processed by Comms.");
 
         S2TasksReceived = meter.CreateCounter<long>(Telemetry.Metrics.S2TasksReceived, description: "Claims received by Tasks (orchestration started).");
@@ -65,7 +63,6 @@ public static class Telemetry
     public static class Metrics
     {
         public const string S1CommsReceived = "claimflow.comms.received";
-        public const string S1CommsSent = "claimflow.comms.sent";
         public const string S1CommsProcessed = "claimflow.comms.processed";
 
         public const string S2TasksReceived = "claimflow.tasks.received";

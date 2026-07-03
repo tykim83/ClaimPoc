@@ -66,10 +66,10 @@
     private int version;
     private MetricsSnapshot? snapshot;
 
-    // Always render the same five series in the same order, zero-filled when a counter
+    // Always render the same four series in the same order, zero-filled when a counter
     // hasn't fired yet. Series and Colors are matched by position, so a measure missing
     // from the scrape would otherwise shift the colors (e.g. dead-lettered turning amber).
-    private static readonly string[] AllMeasures = ["received", "sent", "processed", "failed", "deadlettered"];
+    private static readonly string[] AllMeasures = ["received", "processed", "failed", "deadlettered"];
 
     private readonly ApexChartOptions<MetricPoint> options = new()
     {
@@ -77,7 +77,7 @@
         PlotOptions = new PlotOptions { Bar = new PlotOptionsBar { Horizontal = false, BorderRadius = 3, ColumnWidth = "65%" } },
         Legend = new Legend { Position = LegendPosition.Bottom },
         DataLabels = new DataLabels { Enabled = false },
-        Colors = ["#4f46e5", "#0ea5e9", "#15a34a", "#f59e0b", "#e0322f"],
+        Colors = ["#4f46e5", "#15a34a", "#f59e0b", "#e0322f"],
         Grid = new Grid { BorderColor = "#eef1f5" },
     };
 
@@ -130,7 +130,7 @@
     }
 
     // One point per X-axis column, in axis order — including 0s for columns this measure
-    // doesn't have (e.g. tasks has no "sent") and for the blank spacer. Every series must
+    // doesn't have (e.g. comms has no "failed") and for the blank spacer. Every series must
     // span the SAME categories in the SAME order, otherwise ApexCharts aligns bars by
     // position and they shift where a stage is missing a measure.
     private IEnumerable<MetricPoint> Series(string measure)

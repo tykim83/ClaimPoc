@@ -36,7 +36,6 @@ public class CommsService(ILogger<CommsService> logger, ServiceBusClient service
             },
         };
         await _sender.SendMessageAsync(message, ct);
-        metrics.S1CommsSent.Add(1);
 
         logger.LogInformation("S1-Comms service: published claim event to {Queue}", QueueName);
     }
