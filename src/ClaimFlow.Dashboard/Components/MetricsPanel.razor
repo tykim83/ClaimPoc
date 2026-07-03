@@ -45,13 +45,13 @@
                     }
                 </ApexChart>
 
-                @if (BrickDlq() is { Count: > 0 } dlq)
+                @if (BrickLoss() is { Count: > 0 } losses)
                 {
                     <div class="dlq-strip">
-                        <span class="muted small dlq-label">Unanswered (received − sent) — non-zero means messages dead-lettered at that brick:</span>
-                        @foreach (var (brick, gap) in dlq)
+                        <span class="muted small dlq-label">Events lost per brick = entered − responded (retry-proof: counts claims, not delivery attempts):</span>
+                        @foreach (var (brick, lost) in losses)
                         {
-                            <span class="pill @(gap > 0 ? "fail" : "ok")">@Cap(brick): @gap@(gap > 0 ? " → DLQ" : "")</span>
+                            <span class="pill @(lost > 0 ? "fail" : "ok")">@Cap(brick): @lost lost</span>
                         }
                     </div>
                 }
@@ -137,14 +137,23 @@
         return order.Select(stage => new MetricPoint(stage, measure, byStage.GetValueOrDefault(stage)));
     }
 
-    // Per-brick "unanswered" = received − sent. Every delivery a brick handles ends in a
-    // response (Ok or soft-Failed = sent) EXCEPT ones that threw and dead-lettered, which
-    // bump received but never sent. So a non-zero gap is the metrics-only DLQ signal.
-    // (Retries inflate the exact number; the presence of a gap is the reliable flag.)
-    private List<(string Brick, long Gap)> BrickDlq() =>
-        Bricks.Where(b => snapshot!.Stages.Contains(b))
-              .Select(b => (b, Val(b, "received") - Val(b, "sent")))
-              .ToList();
+    // Retry-proof loss per brick. received/failed count every delivery, so redeliveries
+    // inflate them; but "how many a stage forwarded" and "how many a brick responded to"
+    // each count a claim ONCE. So: entered = the upstream stage's forwarded count (tasks
+    // started, or the previous brick's processed/Ok), responded = this brick's sent.
+    // entered − responded = claims that went in and never came out (dead-lettered / stuck),
+    // independent of how many times each was retried.
+    private static readonly (string Brick, string UpstreamStage, string UpstreamMeasure)[] Flow =
+    [
+        ("classifier", "tasks", "received"),
+        ("preparer", "classifier", "processed"),
+        ("filer", "preparer", "processed"),
+    ];
+
+    private List<(string Brick, long Lost)> BrickLoss() =>
+        Flow.Where(f => snapshot!.Stages.Contains(f.Brick))
+            .Select(f => (f.Brick, Math.Max(0, Val(f.UpstreamStage, f.UpstreamMeasure) - Val(f.Brick, "sent"))))
+            .ToList();
 
     private long Val(string stage, string measure) =>
         snapshot!.Points.FirstOrDefault(p => p.Stage == stage && p.Measure == measure)?.Value ?? 0;

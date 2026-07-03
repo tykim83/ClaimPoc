@@ -20,6 +20,7 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
     private const string Stage = "Preparer";
     private const string ResponseQueue = "orchestrator-responses";
     private const double SoftFailChance = 0.10;
+    private const double HardFailChance = 0.02;   // ~2% dead-letter at this brick; tune freely
 
     // One sender, reused for the singleton's lifetime. Creating a sender per message opens
     // a new AMQP link every time and leaks handles -> QuotaExceeded (max 199/connection).
@@ -32,10 +33,10 @@ public class PreparerService(ILogger<PreparerService> logger, ServiceBusClient s
         // Fake work.
         await Task.Delay(Random.Shared.Next(200, 800), ct);
 
-        // "Poison" messages (~6%, decided by the claim id so the failure is stable across
-        // retries): always throw -> retried -> eventually dead-lettered. This claim's
-        // orchestration is left waiting.
-        if (correlationId[^1] == '0')
+        // Small hard failure -> throw -> retried -> dead-lettered. Deterministic per
+        // (claim, stage) so retries fail identically (message truly reaches the DLQ) and
+        // each brick loses an independent slice. See FailureChaos.
+        if (FailureChaos.HardFails(correlationId, Stage, HardFailChance))
         {
             metrics.S4PreparerFailed.Add(1);
             logger.LogError("S4-Preparer service: poison message, will dead-letter after retries");
