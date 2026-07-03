@@ -5,18 +5,20 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaimFlow.ServiceDefaults;
 
-// Opens a CorrelationId log scope around every function invocation that carries one,
-// so entry points don't repeat the BeginScope boilerplate. Service Bus triggers carry
-// the id in the message's application properties; activity triggers carry it inside
-// their serialized input. Both surface in the binding data as JSON strings, so we
-// scan any JSON object there for a top-level CorrelationId.
-//
-// Durable triggers also expose the instanceId, and by convention orchestrations are
-// started with instanceId = correlationId — so when no JSON carries the id (the
-// orchestrator itself, activities with plain inputs), the instanceId is the fallback.
+// Opens a CorrelationId log scope around every function invocation, whatever the
+// trigger. Resolution order:
+//   1. x-correlation-id (or CorrelationId) HTTP request header
+//   2. any JSON object in the binding data with a top-level CorrelationId
+//      (Service Bus application properties, durable activity inputs)
+//   3. the durable instanceId (orchestrations are started with instanceId = correlationId)
+// It never creates an id: if nothing is found the invocation just runs without the
+// scope. Minting belongs to the system edge (the HTTP entry function), not here -
+// mid-pipeline a missing id is a bug to surface, not to paper over.
+// A found id is also stored in context.Items so entry points can echo it back.
 public class CorrelationScopeMiddleware(ILogger<CorrelationScopeMiddleware> logger) : IFunctionsWorkerMiddleware
 {
-    private const string CorrelationIdKey = "CorrelationId";
+    public const string ItemKey = "CorrelationId";
+    private const string HeaderName = "x-correlation-id";
 
     public async Task Invoke(FunctionContext context, FunctionExecutionDelegate next)
     {
@@ -27,7 +29,9 @@ public class CorrelationScopeMiddleware(ILogger<CorrelationScopeMiddleware> logg
             return;
         }
 
-        using (logger.BeginScope(new Dictionary<string, object> { [CorrelationIdKey] = correlationId }))
+        context.Items[ItemKey] = correlationId;
+
+        using (logger.BeginScope(new Dictionary<string, object> { [ItemKey] = correlationId }))
         {
             await next(context);
         }
@@ -35,45 +39,64 @@ public class CorrelationScopeMiddleware(ILogger<CorrelationScopeMiddleware> logg
 
     private static string? TryFindCorrelationId(FunctionContext context)
     {
-        foreach (var value in context.BindingContext.BindingData.Values)
+        var bindingData = context.BindingContext.BindingData;
+
+        // explicit header first
+        if (bindingData.TryGetValue("Headers", out var headersRaw) && headersRaw is string headersJson)
         {
-            if (value is not string s || !s.StartsWith('{'))
+            var fromHeader = FindInJsonObject(headersJson, HeaderName) ?? FindInJsonObject(headersJson, ItemKey);
+            if (fromHeader is not null)
             {
-                continue;
+                return fromHeader;
             }
+        }
 
-            try
+        // any JSON value carrying a top-level CorrelationId
+        foreach (var value in bindingData.Values)
+        {
+            if (value is string s && s.StartsWith('{') && FindInJsonObject(s, ItemKey) is { } found)
             {
-                using var doc = JsonDocument.Parse(s);
-                if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
-
-                foreach (var prop in doc.RootElement.EnumerateObject())
-                {
-                    // case-insensitive: the durable serializer may camelCase the input
-                    if (prop.Value.ValueKind == JsonValueKind.String
-                        && string.Equals(prop.Name, CorrelationIdKey, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return prop.Value.GetString();
-                    }
-                }
-            }
-            catch (JsonException)
-            {
-                // a string that merely looks like JSON, skip it
+                return found;
             }
         }
 
         // durable fallback: instanceId = correlationId by convention
-        foreach (var kv in context.BindingContext.BindingData)
+        foreach (var kv in bindingData)
         {
             if (string.Equals(kv.Key, "instanceId", StringComparison.OrdinalIgnoreCase)
                 && kv.Value is string instanceId && instanceId.Length > 0)
             {
                 return instanceId;
             }
+        }
+
+        return null;
+    }
+
+    private static string? FindInJsonObject(string json, string propertyName)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                // case-insensitive: serializers and clients disagree on casing
+                if (prop.Value.ValueKind == JsonValueKind.String
+                    && string.Equals(prop.Name, propertyName, StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(prop.Value.GetString()))
+                {
+                    return prop.Value.GetString();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // a string that merely looks like JSON, skip it
         }
 
         return null;
