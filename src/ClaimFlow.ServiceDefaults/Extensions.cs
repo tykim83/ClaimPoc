@@ -51,11 +51,9 @@ public static class Extensions
 
     public static TBuilder ConfigureOpenTelemetry<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
-        // Aspire injects the dashboard OTLP endpoint (OTEL_EXPORTER_OTLP_ENDPOINT).
-        // AppHost additionally injects COLLECTOR_OTLP_ENDPOINT into the metric-emitting
-        // services so their metrics also reach the collector (Prometheus for the UI).
-        // We wire OTLP per-signal (rather than UseOtlpExporter) so metrics can have a
-        // second destination while traces/logs still go only to the dashboard.
+        // OTLP is wired per-signal (not UseOtlpExporter) because metrics go to two
+        // places: the Aspire dashboard and, if COLLECTOR_OTLP_ENDPOINT is set, the
+        // collector as well. Traces/logs only go to the dashboard.
         var useOtlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
         var collectorEndpoint = builder.Configuration["COLLECTOR_OTLP_ENDPOINT"];
 
@@ -75,16 +73,15 @@ public static class Extensions
                 metrics.AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
                     .AddRuntimeInstrumentation()
-                    // Our custom meter (business checkpoint counters).
+                    // our custom meter
                     .AddMeter(ClaimFlow.ServiceDefaults.Telemetry.MeterName);
 
-                // Straight to the Aspire dashboard (env-configured endpoint/headers).
                 if (useOtlp)
                 {
                     metrics.AddOtlpExporter();
                 }
 
-                // Extra metrics-only fan-out to the OTel Collector.
+                // metrics-only fan-out to the collector
                 if (!string.IsNullOrWhiteSpace(collectorEndpoint))
                 {
                     metrics.AddOtlpExporter(otlp =>
@@ -115,8 +112,7 @@ public static class Extensions
         return builder;
     }
 
-    // Registers the pipeline's instruments as a DI singleton. IMeterFactory is
-    // provided by the metrics infrastructure (AddMetrics is idempotent).
+    // the pipeline's counters as a DI singleton
     public static TBuilder AddClaimFlowMetrics<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.Services.AddMetrics();

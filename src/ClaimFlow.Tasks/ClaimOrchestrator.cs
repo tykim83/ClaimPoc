@@ -27,8 +27,7 @@ public class ClaimOrchestrator
         logger.LogInformation("S2-Tasks Orchestrator: started for claim");
         await WriteEvent(context, "orchestration-started", correlationId, null);
 
-        // Sequential calls to each brick: record the request, send it (via the activity —
-        // the only place I/O is allowed), then wait for the matching response event.
+        // one brick at a time: record, send (activities do the I/O), wait for the reply
         foreach (var stage in Stages)
         {
             await WriteEvent(context, $"{stage.ToLowerInvariant()}-requested", correlationId, stage);
@@ -66,8 +65,8 @@ public class ClaimOrchestrator
     }
 }
 
-// Activity: the only place that does I/O (publishes the brick request). It re-opens the
-// CorrelationId scope from its input, since activities are separate invocations.
+// Publishes the brick request. Activities are separate invocations, so the
+// CorrelationId scope is re-opened here from the input.
 public class SendToBrickActivity(ServiceBusSenderCache senders, ILogger<SendToBrickActivity> logger)
 {
     private const string CorrelationIdKey = "CorrelationId";
@@ -97,9 +96,8 @@ public class SendToBrickActivity(ServiceBusSenderCache senders, ILogger<SendToBr
     }
 }
 
-// Activity: counts the claim's terminal outcome exactly once. Called only at the
-// orchestrator's two end points (success / failed) — never per brick — so the metric
-// tracks whole-process completions, and stays out of the replayed orchestrator body.
+// Counts the terminal outcome. Lives in an activity because the orchestrator body
+// replays; an activity runs exactly once.
 public class RecordOutcomeActivity(ClaimIntakeMetrics metrics)
 {
     [Function(nameof(RecordOutcomeActivity))]

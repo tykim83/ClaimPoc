@@ -9,7 +9,6 @@ var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-// Aspire Service Bus client (publisher for the response back to Tasks).
 builder.AddAzureServiceBusClient("messaging");
 
 builder.Services.AddOpenTelemetry().UseFunctionsWorkerDefaults();

@@ -6,14 +6,8 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaimFlow.Tasks;
 
-// Service Bus-triggered entry point for the WSM/orchestrator. Receives the claim
-// event Comms publishes to `orchestrator-in`, re-establishes the CorrelationId log
-// scope from the message's application properties (nothing is passed by hand), and
-// starts the durable orchestration using CorrelationId AS the instanceId.
-//
-// NOTE (this slice): Service Bus is not wired in AppHost yet and Comms does not
-// publish, so this does not run end-to-end. The connection/queue names below are
-// the intended topology; they become live in the next slice.
+// Picks up the claim event from Comms and starts the durable orchestration.
+// The CorrelationId log scope is opened by the middleware.
 public class OrchestratorStarter(ClaimIntakeMetrics metrics)
 {
     private const string QueueName = "orchestrator-in";

@@ -5,13 +5,11 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaimFlow.Tasks;
 
-// What the orchestrator passes. id + timestamp are NOT set here — they're generated in
-// the activity, since Guid/clock are non-deterministic and must stay out of the orchestrator.
+// id + timestamp are generated in the activity, not here: Guid/clock are
+// non-deterministic and must stay out of the orchestrator.
 public record WriteEventInput(string EventType, string CorrelationId, string OrchestratorId, string? Stage, string Status);
 
-// What actually gets stored (one append-only doc per event). PartitionKey = correlationId.
-// Every event carries a status: "Success" for the normal flow, and Success/Failed on the
-// single terminal "process-completed" event.
+// One append-only doc per event, partitioned by correlationId.
 public record EventRecord(
     string id,
     string correlationId,
@@ -22,8 +20,7 @@ public record EventRecord(
     string? traceId,
     DateTime timestamp);
 
-// Activity: the only place that writes to Cosmos. Re-opens the CorrelationId scope from
-// its input (activities are separate invocations).
+// The only place that writes to Cosmos.
 public class WriteEventActivity(CosmosClient cosmosClient, ILogger<WriteEventActivity> logger)
 {
     private const string CorrelationIdKey = "CorrelationId";

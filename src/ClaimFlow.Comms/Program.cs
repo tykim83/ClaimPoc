@@ -8,14 +8,10 @@ var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-// Aspire Service Bus client (publisher). Resolves the emulator connection string
-// injected by the AppHost's WithReference(serviceBus) under the "messaging" key.
 builder.AddAzureServiceBusClient("messaging");
 
-// Integrate the isolated worker's telemetry with the Functions host pipeline:
-// registers the worker ActivitySource (function/service work -> child spans in
-// the host trace) and coordinates logging so the host stops relaying a duplicate
-// copy of each user log.
+// without this the host relays a second copy of every log and the trace stays flat,
+// see docs/isolated-worker-double-logging.md
 builder.Services.AddOpenTelemetry().UseFunctionsWorkerDefaults();
 
 builder.Services.AddSingleton<ICommsService, CommsService>();

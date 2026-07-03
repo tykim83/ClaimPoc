@@ -9,8 +9,8 @@ public interface IClassifierService
     Task HandleAsync(string correlationId, string? orchestratorId, CancellationToken ct = default);
 }
 
-// Injected service, same shape as Comms. CorrelationId + OrchestratorId are passed in
-// only as message *data*; the log lines pick up CorrelationId from the ambient scope.
+// CorrelationId/OrchestratorId come in as message data only; the log lines get their
+// CorrelationId from the scope the middleware opened.
 public class ClassifierService(ILogger<ClassifierService> logger, ServiceBusClient serviceBusClient, ClaimIntakeMetrics metrics) : IClassifierService
 {
     private const string CorrelationIdKey = "CorrelationId";
@@ -22,20 +22,18 @@ public class ClassifierService(ILogger<ClassifierService> logger, ServiceBusClie
     private const double SoftFailChance = 0.10;
     private const double HardFailChance = 0.02;   // ~2% dead-letter at this brick; tune freely
 
-    // One sender, reused for the singleton's lifetime. Creating a sender per message opens
-    // a new AMQP link every time and leaks handles -> QuotaExceeded (max 199/connection).
+    // one sender per queue, reused: a sender per message leaks AMQP links (cap 199)
     private readonly ServiceBusSender _sender = serviceBusClient.CreateSender(ResponseQueue);
 
     public async Task HandleAsync(string correlationId, string? orchestratorId, CancellationToken ct = default)
     {
         logger.LogInformation("S3-Classifier service: started process");
 
-        // Fake work.
+        // fake work
         await Task.Delay(Random.Shared.Next(200, 800), ct);
 
-        // Small hard failure -> throw -> retried -> dead-lettered. Deterministic per
-        // (claim, stage) so retries fail identically (message truly reaches the DLQ) and
-        // each brick loses an independent slice. See FailureChaos.
+        // hard failure: throw -> retried -> dead-lettered. Must be deterministic per
+        // claim+stage, otherwise the retry would succeed and nothing ever reaches the DLQ.
         if (FailureChaos.HardFails(correlationId, Stage, HardFailChance))
         {
             metrics.S3ClassifierFailed.Add(1);
@@ -43,8 +41,7 @@ public class ClassifierService(ILogger<ClassifierService> logger, ServiceBusClie
             throw new InvalidOperationException("Simulated Classifier failure");
         }
 
-        // ~10% soft failure: reported as Failed on the response so the orchestrator can
-        // stop the claim; otherwise Ok.
+        // soft failure: reply Failed so the orchestrator stops the claim cleanly
         string status;
         if (Random.Shared.NextDouble() < SoftFailChance)
         {
@@ -58,9 +55,6 @@ public class ClassifierService(ILogger<ClassifierService> logger, ServiceBusClie
             status = "Ok";
         }
 
-        // Publish the response to the shared responses queue. CorrelationId (business id)
-        // + OrchestratorId (durable instanceId, echoed back for RaiseEvent routing) + Stage
-        // ride as app properties.
         var message = new ServiceBusMessage(BinaryData.FromObjectAsJson(new { claimId = correlationId }))
         {
             ApplicationProperties =

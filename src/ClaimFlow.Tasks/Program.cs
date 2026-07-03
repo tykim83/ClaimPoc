@@ -9,22 +9,18 @@ var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-// Publisher used by the fan-out activity to send requests to the bricks.
 builder.AddAzureServiceBusClient("messaging");
 
-// Cosmos client for the append-only event log (partition key = /correlationId).
+// event log store (partition key = /correlationId)
 builder.AddAzureCosmosClient("cosmos");
 
-// Reused ServiceBus senders (activities are transient — see ServiceBusSenderCache).
 builder.Services.AddSingleton<ServiceBusSenderCache>();
 
-// Integrate the isolated worker's telemetry with the Functions host pipeline:
-// registers the worker ActivitySource (function/service work -> child spans in
-// the host trace) and coordinates logging so the host stops relaying a duplicate
-// copy of each user log. Same reasoning as ClaimFlow.Comms.
+// without this the host relays a second copy of every log and the trace stays flat,
+// see docs/isolated-worker-double-logging.md
 builder.Services.AddOpenTelemetry().UseFunctionsWorkerDefaults();
 
-// Opens the CorrelationId log scope automatically for every triggered function.
+// opens the CorrelationId log scope for every triggered function
 builder.UseMiddleware<CorrelationScopeMiddleware>();
 
 builder.Build().Run();
