@@ -10,6 +10,9 @@
         <button class="ghost metrics-refresh" @onclick="Refresh" @onclick:stopPropagation="true" disabled="@loading">
             @(loading ? "…" : "Refresh")
         </button>
+        <button class="ghost metrics-refresh" @onclick="Clear" @onclick:stopPropagation="true" disabled="@loading">
+            Clear
+        </button>
     </header>
 
     @if (expanded)
@@ -34,9 +37,9 @@
                     @foreach (var measure in snapshot.Measures)
                     {
                         <ApexPointSeries TItem="MetricPoint"
-                                         Items="@snapshot.Points.Where(p => p.Measure == measure)"
+                                         Items="@Series(measure)"
                                          Name="@Cap(measure)"
-                                         XValue="@(p => Cap(p.Stage))"
+                                         XValue="@(p => Label(p.Stage))"
                                          YValue="@(p => (decimal)p.Value)"
                                          SeriesType="SeriesType.Bar" />
                     }
@@ -63,6 +66,12 @@
         Grid = new Grid { BorderColor = "#eef1f5" },
     };
 
+    // Bricks are visually separated from Comms/Tasks by an empty spacer column.
+    private static readonly string[] Bricks = ["classifier", "preparer", "filer"];
+    private const string Spacer = " "; // em space: a unique category that renders blank
+
+    private List<string> order = [];
+
     protected override Task OnInitializedAsync() => Refresh();
 
     private void Toggle() => expanded = !expanded;
@@ -71,9 +80,53 @@
     {
         loading = true;
         snapshot = await Metrics.GetAsync();
+        order = BuildOrder(snapshot);
         version++;
         loading = false;
     }
+
+    // Zero the charts from now on: records the current totals as the baseline, then reloads
+    // so everything reads back at 0 until the next run increments the counters.
+    private async Task Clear()
+    {
+        loading = true;
+        await Metrics.ClearAsync();
+        await Refresh();
+    }
+
+    // Stage order for the X axis: whatever the snapshot has (already ranked), with one
+    // blank column inserted between Tasks and the first brick.
+    private static List<string> BuildOrder(MetricsSnapshot? snap)
+    {
+        var result = new List<string>();
+        if (snap is null) return result;
+        var hasTasks = snap.Stages.Contains("tasks");
+        var spacerAdded = false;
+        foreach (var stage in snap.Stages)
+        {
+            if (hasTasks && !spacerAdded && Bricks.Contains(stage))
+            {
+                result.Add(Spacer);
+                spacerAdded = true;
+            }
+            result.Add(stage);
+        }
+        return result;
+    }
+
+    // One point per X-axis column, in axis order — including 0s for columns this measure
+    // doesn't have (e.g. tasks has no "sent") and for the blank spacer. Every series must
+    // span the SAME categories in the SAME order, otherwise ApexCharts aligns bars by
+    // position and they shift where a stage is missing a measure.
+    private IEnumerable<MetricPoint> Series(string measure)
+    {
+        var byStage = snapshot!.Points
+            .Where(p => p.Measure == measure)
+            .ToDictionary(p => p.Stage, p => p.Value);
+        return order.Select(stage => new MetricPoint(stage, measure, byStage.GetValueOrDefault(stage)));
+    }
+
+    private static string Label(string stage) => stage == Spacer ? Spacer : Cap(stage);
 
     private static string Cap(string s) => string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s[1..];
 }

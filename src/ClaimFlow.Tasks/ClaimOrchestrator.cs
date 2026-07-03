@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using ClaimFlow.ServiceDefaults;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.DurableTask;
 using Microsoft.Extensions.Logging;
@@ -41,6 +42,7 @@ public class ClaimOrchestrator
             {
                 // A stage soft-failed: stop here and close the claim with a failed terminal event.
                 await WriteEvent(context, "process-completed", correlationId, stage, "Failed");
+                await context.CallActivityAsync(nameof(RecordOutcomeActivity), "Failed");
                 logger.LogWarning("S2-Tasks Orchestrator: {Stage} failed, claim marked failed", stage);
                 return;
             }
@@ -50,6 +52,7 @@ public class ClaimOrchestrator
         }
 
         await WriteEvent(context, "process-completed", correlationId, null, "Success");
+        await context.CallActivityAsync(nameof(RecordOutcomeActivity), "Success");
         logger.LogInformation("S2-Tasks Orchestrator: all stages done");
     }
 
@@ -91,5 +94,24 @@ public class SendToBrickActivity(ServiceBusSenderCache senders, ILogger<SendToBr
         await sender.SendMessageAsync(message);
 
         logger.LogInformation("S2-Tasks: sent request to {Queue}", queue);
+    }
+}
+
+// Activity: counts the claim's terminal outcome exactly once. Called only at the
+// orchestrator's two end points (success / failed) — never per brick — so the metric
+// tracks whole-process completions, and stays out of the replayed orchestrator body.
+public class RecordOutcomeActivity(ClaimIntakeMetrics metrics)
+{
+    [Function(nameof(RecordOutcomeActivity))]
+    public void Run([ActivityTrigger] string status)
+    {
+        if (status == "Failed")
+        {
+            metrics.S2TasksFailed.Add(1);
+        }
+        else
+        {
+            metrics.S2TasksProcessed.Add(1);
+        }
     }
 }

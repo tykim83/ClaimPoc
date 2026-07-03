@@ -15,10 +15,10 @@ public record MetricsSnapshot(
 // define (the "claimflow.*" meter) — never the framework/runtime/http metrics. Nothing
 // is curated or renamed: every claimflow counter that's present shows up, discovered
 // from its own name (claimflow_<stage>_<measure>[_total]).
-public class MetricsClient(HttpClient httpClient)
+public class MetricsClient(HttpClient httpClient, MetricsBaseline baseline)
 {
     private const string Prefix = "claimflow_";
-    private static readonly string[] StageOrder = ["comms", "classifier", "preparer", "filer"];
+    private static readonly string[] StageOrder = ["comms", "tasks", "classifier", "preparer", "filer"];
     private static readonly string[] MeasureOrder = ["received", "sent", "processed", "failed"];
 
     public bool Configured => httpClient.BaseAddress is not null;
@@ -33,7 +33,7 @@ public class MetricsClient(HttpClient httpClient)
         try
         {
             var text = await httpClient.GetStringAsync("/metrics", ct);
-            var points = Parse(text);
+            var points = baseline.Adjust(Parse(text));
             var stages = points.Select(p => p.Stage).Distinct().OrderBy(RankBy(StageOrder)).ToList();
             var measures = points.Select(p => p.Measure).Distinct().OrderBy(RankBy(MeasureOrder)).ToList();
             return new MetricsSnapshot(true, null, stages, measures, points);
@@ -42,6 +42,19 @@ public class MetricsClient(HttpClient httpClient)
         {
             return Empty(ex.Message);
         }
+    }
+
+    // "Clear": record the current raw totals as the new zero-offset. The counters keep
+    // climbing in each service; the panel just shows the delta since this point.
+    public async Task ClearAsync(CancellationToken ct = default)
+    {
+        if (!Configured)
+        {
+            return;
+        }
+
+        var text = await httpClient.GetStringAsync("/metrics", ct);
+        baseline.Capture(Parse(text));
     }
 
     private static Func<string, int> RankBy(string[] order) => s =>

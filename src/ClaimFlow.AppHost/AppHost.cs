@@ -41,6 +41,8 @@ var comms = builder.AddAzureFunctionsProject<Projects.ClaimFlow_Comms>("s1-comms
 builder.AddAzureFunctionsProject<Projects.ClaimFlow_Tasks>("s2-tasks")
     .WithReference(serviceBus)
     .WithReference(cosmos)
+    .WithEnvironment("COLLECTOR_OTLP_ENDPOINT", collectorOtlp)
+    .WithEnvironment("OTEL_METRIC_EXPORT_INTERVAL", "2000")
     .WaitFor(orchestratorIn)
     .WaitFor(events);
 

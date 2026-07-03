@@ -20,6 +20,10 @@ builder.Services.AddHttpClient<ClaimStarter>(client =>
 
 builder.Services.AddScoped<EventStore>();
 
+// Holds the "cleared" zero-offset for the cumulative counters (singleton so it survives
+// the transient MetricsClient). See MetricsBaseline.
+builder.Services.AddSingleton<MetricsBaseline>();
+
 // Scrapes the OTel Collector's Prometheus endpoint (injected by AppHost) for the
 // metrics funnel. Base address is unset if the collector isn't wired — the client
 // then reports "not configured" rather than throwing.

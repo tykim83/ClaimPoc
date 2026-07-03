@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using ClaimFlow.ServiceDefaults;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.DurableTask.Client;
 using Microsoft.Extensions.Logging;
@@ -13,7 +14,7 @@ namespace ClaimFlow.Tasks;
 // NOTE (this slice): Service Bus is not wired in AppHost yet and Comms does not
 // publish, so this does not run end-to-end. The connection/queue names below are
 // the intended topology; they become live in the next slice.
-public class OrchestratorStarter
+public class OrchestratorStarter(ClaimIntakeMetrics metrics)
 {
     private const string QueueName = "orchestrator-in";
     private const string ConnectionName = "messaging";
@@ -37,6 +38,7 @@ public class OrchestratorStarter
         }
 
         logger.LogInformation("S2-Tasks  starter: received claim event from Comms");
+        metrics.S2TasksReceived.Add(1);
 
         // instanceId (the orchestratorId) is durable-generated, distinct from the
         // business correlationId which we pass as the orchestration input.

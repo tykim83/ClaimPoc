@@ -8,6 +8,10 @@ public sealed class ClaimIntakeMetrics
     public Counter<long> S1CommsSent { get; }
     public Counter<long> S1CommsProcessed { get; }
 
+    public Counter<long> S2TasksReceived { get; }
+    public Counter<long> S2TasksProcessed { get; }
+    public Counter<long> S2TasksFailed { get; }
+
     public Counter<long> S3ClassifierReceived { get; }
     public Counter<long> S3ClassifierSent { get; }
     public Counter<long> S3ClassifierProcessed { get; }
@@ -30,6 +34,10 @@ public sealed class ClaimIntakeMetrics
         S1CommsReceived = meter.CreateCounter<long>(Telemetry.Metrics.S1CommsReceived, description: "Claims received by Comms.");
         S1CommsSent = meter.CreateCounter<long>(Telemetry.Metrics.S1CommsSent, description: "Claim events sent by Comms.");
         S1CommsProcessed = meter.CreateCounter<long>(Telemetry.Metrics.S1CommsProcessed, description: "Claims processed by Comms.");
+
+        S2TasksReceived = meter.CreateCounter<long>(Telemetry.Metrics.S2TasksReceived, description: "Claims received by Tasks (orchestration started).");
+        S2TasksProcessed = meter.CreateCounter<long>(Telemetry.Metrics.S2TasksProcessed, description: "Claims completed successfully by Tasks.");
+        S2TasksFailed = meter.CreateCounter<long>(Telemetry.Metrics.S2TasksFailed, description: "Claims failed by Tasks.");
 
         S3ClassifierReceived = meter.CreateCounter<long>(Telemetry.Metrics.S3ClassifierReceived, description: "Claims received by Classifier.");
         S3ClassifierSent = meter.CreateCounter<long>(Telemetry.Metrics.S3ClassifierSent, description: "Responses sent by Classifier.");
@@ -59,6 +67,10 @@ public static class Telemetry
         public const string S1CommsReceived = "claimflow.comms.received";
         public const string S1CommsSent = "claimflow.comms.sent";
         public const string S1CommsProcessed = "claimflow.comms.processed";
+
+        public const string S2TasksReceived = "claimflow.tasks.received";
+        public const string S2TasksProcessed = "claimflow.tasks.processed";
+        public const string S2TasksFailed = "claimflow.tasks.failed";
 
         public const string S3ClassifierReceived = "claimflow.classifier.received";
         public const string S3ClassifierSent = "claimflow.classifier.sent";
