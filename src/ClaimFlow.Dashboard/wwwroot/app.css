@@ -234,6 +234,8 @@ input:focus, select:focus {
 .charts { display: grid; grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start; }
 .chart-box h3 { margin: 0.75rem 0 0.15rem; font-size: 0.95rem; font-weight: 600; }
 .small { font-size: 0.78rem; margin: 0 0 0.5rem; }
+.dlq-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.9rem; }
+.dlq-label { margin: 0; }
 @media (max-width: 820px) { .charts { grid-template-columns: 1fr; } }
 
 /* ---- Toast ---- */
