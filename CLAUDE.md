@@ -332,9 +332,3 @@ use 13.2.x package versions), Docker running, **Azure Functions Core Tools 4.12.
 `ClaimFlow.Messaging` middleware (receive scope/metrics/audit + publisher), add the Service Bus
 emulator, and wire Comms → Classifier to prove the middleware. The generic per-stage metrics
 (success/fail + latency) belong in that middleware, not in services.
-
-## Planned work
-
-The next chunk — the **Durable-orchestration sample journey** (Comms → Tasks durable → 3 bricks → back)
-— lives in **[`PLAN.md`](PLAN.md)**: components, design decisions (CorrelationId = orchestration
-instanceId, two stores, orchestrator determinism), and open questions.

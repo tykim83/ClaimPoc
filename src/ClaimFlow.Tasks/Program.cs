@@ -16,8 +16,8 @@ builder.AddAzureCosmosClient("cosmos");
 
 builder.Services.AddSingleton<ServiceBusSenderCache>();
 
-// without this the host relays a second copy of every log and the trace stays flat,
-// see docs/isolated-worker-double-logging.md
+// without this the host relays a second copy of every log and the trace stays flat
+// (isolated-worker double logging — see the gotcha in CLAUDE.md)
 builder.Services.AddOpenTelemetry().UseFunctionsWorkerDefaults();
 
 // opens the CorrelationId log scope for every triggered function
