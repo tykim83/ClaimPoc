@@ -482,8 +482,9 @@ $RECYCLE.BIN/
 *.swp
 
 # ---- ClaimFlow (Azure Functions / Aspire / emulators) ----
-# Azure Functions local settings (may contain connection strings / secrets)
-local.settings.json
+# local.settings.json is committed on purpose: POC, emulator-only values, no secrets.
+# A fresh clone without it gets a Functions host that won't start (no worker runtime,
+# no storage) — a far worse failure mode here than the usual secret-leak concern.
 
 # Azurite storage emulator artifacts (if run in-repo)
 __azurite_db*__*
