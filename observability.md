@@ -16,7 +16,7 @@ The two views are joined by a single identifier: the **CorrelationId**, minted e
 
 ## The technical view
 
-A claim's journey crosses many components: a React front end, web apps, Azure Functions behind HTTP and Service Bus triggers, durable function orchestrations and their activities. Distributed tracing is what stitches one request's path through all of them into a single picture. Each component records its work as a **span**, all spans of one journey share a **trace id**, and that id travels between components in a standard header (W3C Trace Context) on every HTTP call and Service Bus message. The concepts are explained well in [.NET distributed tracing](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/distributed-tracing-concepts).
+A claim's journey crosses many components: a React front end, web apps, Azure Functions behind HTTP and Service Bus triggers, durable function orchestrations and their activities. Distributed tracing is what stitches one request's path through all of them into a single picture. Each component records its work as a **span**, all spans of one operation share a **trace id**, and that id travels between components in a standard header (W3C Trace Context) on every HTTP call and Service Bus message. The concepts are explained well in [.NET distributed tracing](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/distributed-tracing-concepts).
 
 Two names come up in this space, and they are not competing technologies:
 
@@ -25,7 +25,7 @@ Two names come up in this space, and they are not competing technologies:
 
 In short: .NET provides the tracing API, OpenTelemetry provides the pipeline. We instrument once, and the backend is a configuration choice.
 
-Because the glue is the W3C standard rather than anything .NET specific, non-.NET components join the same trace. For the React app this means a trace can start in the browser and continue through every backend hop, as long as the front end sends the `traceparent` header on its API calls (the OpenTelemetry JavaScript SDK and the Application Insights JavaScript SDK both do this; CORS must allow the header, otherwise correlation silently stops at the browser boundary).
+Because the glue is the W3C standard rather than anything .NET specific, non-.NET components join the same trace too, including the React front end; the details and caveats for the browser live in the Traces section below.
 
 ### One journey, several traces
 
@@ -58,7 +58,7 @@ builder.Logging.AddOpenTelemetry(logging =>
 });
 ```
 
-Without it, scopes are silently dropped and the whole CorrelationId story disappears with no error anywhere.
+Without it, scopes are silently dropped and the whole CorrelationId story disappears with no error anywhere. This trips people up often enough that Microsoft's [Functions OpenTelemetry guide](https://learn.microsoft.com/en-us/azure/azure-functions/opentelemetry-howto#logging-scopes-not-included) calls it out in its troubleshooting section.
 
 For the scope to be opened on arrival, the id has to ride along on every hop between services. The general rule: carry it in the transport's **envelope** (headers, properties, metadata), not inside the payload body. Envelope fields can be read uniformly by middleware and by tooling (message peek, dead-letter explorers) without knowing or deserializing each payload's schema. Per transport:
 
@@ -66,7 +66,7 @@ For the scope to be opened on arrival, the id has to ride along on every hop bet
 - **Service Bus messages**: a `CorrelationId` application property, not a field in the message body. (Service Bus also has a built-in `CorrelationId` envelope property intended for request/reply correlation; using it instead is fine, but pick one of the two platform-wide.)
 - **Event Hubs**: a `CorrelationId` entry in the event's application properties, same rule as Service Bus. One extra care point: consumers typically receive events in batches, so the scope is opened per event inside the loop, not once per batch.
 - **Event Grid**: prefer the [CloudEvents schema](https://learn.microsoft.com/en-us/azure/event-grid/cloud-event-schema) and carry the id as an extension attribute (e.g. `correlationid`). The classic EventGridEvent schema is not extensible, so there the only option is a top-level field in `data`; treat that as the fallback, not the pattern.
-- **Cosmos change feed**: there is no envelope at all, the document is the message. So every document written as part of claim processing carries a `correlationId` property, and the change-feed consumer opens its scope from that. This hop is also one where trace context cannot flow at all, which is exactly why the CorrelationId, not the trace, is the thread we rely on.
+- **Cosmos change feed**: there is no envelope at all, the document is the message. So every document written as part of claim processing carries a `correlationId` property, and the change-feed consumer opens its scope from that. (This hop also breaks the trace; more on that in the Traces section.)
 - **Durable orchestrations**: start the orchestration with `InstanceId = CorrelationId`, and include the id in each activity's input.
 
 The id is minted exactly once, at the edge where the claim enters the platform. Everywhere else the rule is propagate, never create: a missing id mid-pipeline is a bug we want to see, not silently paper over with a fresh guid.
@@ -75,6 +75,8 @@ Two more things to avoid:
 
 - **Per-team variations of the key name** (`corrId`, `x-request-id`, `correlation_id`). The value of the convention is that one query finds everything; every variation silently splits the search space. One name, everywhere.
 - **Using the trace id as the correlation id.** Trace ids are infrastructure: they can be sampled away, restarted at a broken hop, and are not under our control. The CorrelationId is a business identifier we own end to end. The two complement each other, as the next section covers, but they are not interchangeable.
+
+One alternative worth naming, because a reviewer will ask: OpenTelemetry **Baggage** is a standard mechanism for carrying application context, such as a correlation id, alongside trace context. We deliberately do not rely on it, for a structural reason: baggage lives and dies with the trace context it rides on, and the whole point of the CorrelationId is to survive the places where traces break, like a human step or the change feed. (In practice the gap is even wider: the modern Service Bus SDK [does not flow baggage through messages](https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/servicebus/Azure.Messaging.ServiceBus/MigrationGuide.md#distributed-tracing) at all, even though the trace context itself makes that hop.) The envelope conventions above are the robust path.
 
 **Open decision: who opens the scope?** There are two ways of working here.
 
@@ -123,7 +125,7 @@ Where we stand per component:
 
 **Web apps and APIs.** Trace propagation over HTTP is the most mature part of the .NET OpenTelemetry story and works out of the box. We treat this as solid.
 
-**Function apps.** HTTP and Service Bus triggers we have validated: the context flows and the hops join into one trace. The other triggers we use (Event Hubs, Event Grid) carry the same standard context and are expected to behave the same, but each should be verified before we rely on it. One overlay to keep in mind: OpenTelemetry output from isolated-worker function apps is still marked preview by Microsoft, so keeping the Functions packages current matters here more than usual.
+**Function apps.** HTTP and Service Bus triggers we have validated: the context flows and the hops join into one trace. The other triggers we use (Event Hubs, Event Grid) carry the same standard context and are expected to behave the same, but each should be verified before we rely on it. One overlay to keep in mind: OpenTelemetry support in Functions is the newest part of this stack, so keeping the Functions packages current matters here more than usual.
 
 **Durable Functions.** Whether the orchestration, its activities, and sub-orchestrations join into one trace tree depends on the Durable extension version and configuration: recent versions support distributed tracing, but it has to be switched on ([how-to and details](https://learn.microsoft.com/en-us/azure/durable-task/sdks/durable-task-scheduler-opentelemetry-tracing?tabs=csharp&pivots=durable-functions)):
 
@@ -143,7 +145,7 @@ plus registering the `Microsoft.DurableTask` activity source with OpenTelemetry.
 
 In short, the pieces we have not validated yet: Event Hubs and Event Grid trigger correlation, the Durable extension versions and configuration in our apps, change-feed behaviour with our SDK versions, and browser-to-backend correlation including CORS.
 
-One more silent trace-breaker to know about: **sampling**. Application Insights samples telemetry by default, and a sampled-out span makes a trace look broken even though propagation worked fine. When traces come up short in production, check sampling settings before suspecting the plumbing.
+One more silent trace-breaker to know about: **sampling**. Application Insights samples telemetry by default, and sampling decisions are parent-based: when a parent span is dropped, everything under it goes too, so a whole leg can vanish even though propagation worked fine. When traces come up short in production, check sampling settings before suspecting the plumbing.
 
 **Do we need to store the trace id against the CorrelationId?** Our recommendation: no separate store is needed, because the logs already are that mapping. Every log line written inside a trace carries the trace id automatically, and with the scope from the previous section it carries the CorrelationId too. So one query by CorrelationId returns the trace ids of every fragment of the journey, including across the breaks described above. The practical rule that keeps this true: every service logs at least one line per unit of work.
 
