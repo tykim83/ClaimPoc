@@ -2,6 +2,14 @@
 
 This page describes how we make the claim-processing pipeline observable: how we follow a single claim across every service that touches it, and how we know the platform itself is healthy.
 
+> ℹ️ **Key points**
+>
+> - One claim journey = one **CorrelationId**, minted once at the edge, plus several traces (one per automated leg).
+> - Every log line carries the CorrelationId through a log scope; `IncludeScopes = true` or it silently disappears.
+> - The id travels in the transport envelope (header, message property, document field), never in the payload.
+> - Per-stage metric counters, counting claims rather than attempts, are what catch a silently lost claim.
+> - Open decisions: shared middleware vs per-team scopes; consolidating Application Insights; where the technical dashboard lives.
+
 ## Two views of observability
 
 We need to answer two different kinds of question, for two different audiences.
@@ -29,7 +37,7 @@ Because the glue is the W3C standard rather than anything .NET specific, non-.NE
 
 ### One journey, several traces
 
-Before going into logs and traces separately, it is worth stating the model that drives everything below. A trace covers one bounded operation: a request arrives, work happens, spans close. A claim is not one bounded operation. It can pause for human input and resume hours or days later, and it can pass through hops where trace context cannot follow. When a person acts in the UI to move a claim forward, that action is a new operation with a new trace id; there is no good way (and no good reason) to force it back into the original trace.
+First, the model that drives everything below. A trace covers one bounded operation: a request arrives, work happens, spans close. A claim is not one bounded operation. It can pause for human input and resume hours or days later, and it can pass through hops where trace context cannot follow. When a person acts in the UI to move a claim forward, that action is a new operation with a new trace id; there is no good way (and no good reason) to force it back into the original trace.
 
 So the realistic picture is: **one claim journey is one CorrelationId and several traces**, one per automated leg, split wherever a human step or a context-breaking hop sits in the middle. The two are complementary, not alternatives. Traces give depth within a leg: timing, dependencies, where an error happened. The CorrelationId is the thread across the whole journey and is how the legs are found together. The next two sections cover each half: how the CorrelationId gets onto every log line, and how we keep each trace leg intact.
 
@@ -39,7 +47,7 @@ So the realistic picture is: **one claim journey is one CorrelationId and severa
 
 Distributed traces are valuable, but there are always edge cases where trace context does not survive a hop. Log search is also the tool everyone reaches for first. So our strong recommendation is that **every log line a claim produces, in every service, carries the claim's CorrelationId**, independently of tracing.
 
-The mechanism for this is the **log scope**. A scope attaches key/value pairs to every log line written inside a unit of work, including log lines from services deeper in the call chain that were never given the id. Open the scope once, where the request or message arrives, and everything logged until that work completes carries the CorrelationId automatically. No method signatures change and nobody passes the id to a logger by hand:
+The mechanism is the **log scope**: key/value pairs attached to every log line written inside a unit of work, including lines from services deeper in the call chain that were never given the id. Open the scope once, where the request or message arrives, and everything logged until the work completes carries the CorrelationId automatically; nobody passes the id to a logger by hand:
 
 ```csharp
 // at the top of the entry point (HTTP handler, message handler, function)
@@ -49,7 +57,7 @@ using var scope = logger.BeginScope(new Dictionary<string, object> { ["Correlati
 // and across awaits, carries the id
 ```
 
-One configuration gotcha to be aware of: attaching scopes to log output is opt-in, per logging provider. For us that means `IncludeScopes = true` on the OpenTelemetry logging options:
+Attaching scopes to log output is opt-in, per logging provider. For us that means `IncludeScopes = true` on the OpenTelemetry logging options:
 
 ```csharp
 builder.Logging.AddOpenTelemetry(logging =>
@@ -58,16 +66,18 @@ builder.Logging.AddOpenTelemetry(logging =>
 });
 ```
 
-Without it, scopes are silently dropped and the whole CorrelationId story disappears with no error anywhere. This trips people up often enough that Microsoft's [Functions OpenTelemetry guide](https://learn.microsoft.com/en-us/azure/azure-functions/opentelemetry-howto#logging-scopes-not-included) calls it out in its troubleshooting section.
+> ⚠️ Without `IncludeScopes = true`, scopes are silently dropped and the whole CorrelationId story disappears with no error anywhere. Common enough that Microsoft's [Functions OpenTelemetry guide](https://learn.microsoft.com/en-us/azure/azure-functions/opentelemetry-howto#logging-scopes-not-included) covers it in its troubleshooting section.
 
-For the scope to be opened on arrival, the id has to ride along on every hop between services. The general rule: carry it in the transport's **envelope** (headers, properties, metadata), not inside the payload body. Envelope fields can be read uniformly by middleware and by tooling (message peek, dead-letter explorers) without knowing or deserializing each payload's schema. Per transport:
+For the scope to be opened on arrival, the id has to ride along on every hop between services. The general rule: carry it in the transport's **envelope** (headers, properties, metadata), never inside the payload body. Envelope fields can be read uniformly by middleware and tooling (message peek, dead-letter explorers) without knowing each payload's schema.
 
-- **HTTP calls**: an `x-correlation-id` request header. Not in the body or query string.
-- **Service Bus messages**: a `CorrelationId` application property, not a field in the message body. (Service Bus also has a built-in `CorrelationId` envelope property intended for request/reply correlation; using it instead is fine, but pick one of the two platform-wide.)
-- **Event Hubs**: a `CorrelationId` entry in the event's application properties, same rule as Service Bus. One extra care point: consumers typically receive events in batches, so the scope is opened per event inside the loop, not once per batch.
-- **Event Grid**: prefer the [CloudEvents schema](https://learn.microsoft.com/en-us/azure/event-grid/cloud-event-schema) and carry the id as an extension attribute (e.g. `correlationid`). The classic EventGridEvent schema is not extensible, so there the only option is a top-level field in `data`; treat that as the fallback, not the pattern.
-- **Cosmos change feed**: there is no envelope at all, the document is the message. So every document written as part of claim processing carries a `correlationId` property, and the change-feed consumer opens its scope from that. (This hop also breaks the trace; more on that in the Traces section.)
-- **Durable orchestrations**: start the orchestration with `InstanceId = CorrelationId`, and include the id in each activity's input. One caveat: orchestrator functions replay, so a log line written in the orchestrator body is re-emitted on every replay unless it goes through `context.CreateReplaySafeLogger(...)`; activity code is unaffected.
+| Transport | Where the id goes | Notes |
+|---|---|---|
+| HTTP | `x-correlation-id` request header | Not the body or query string |
+| Service Bus | `CorrelationId` application property | The built-in `CorrelationId` envelope property works too; pick one platform-wide. Never the message body |
+| Event Hubs | `CorrelationId` application property | Consumers get batches: open the scope per event, not per batch |
+| Event Grid | [CloudEvents](https://learn.microsoft.com/en-us/azure/event-grid/cloud-event-schema) extension attribute (e.g. `correlationid`) | The classic EventGridEvent schema is not extensible; a top-level field in `data` is the fallback, not the pattern |
+| Cosmos change feed | `correlationId` property on the document itself | No envelope exists. This hop also breaks the trace (see Traces) |
+| Durable orchestrations | `InstanceId = CorrelationId`, plus the id in each activity's input | Orchestrator code replays: log through `context.CreateReplaySafeLogger(...)`; activities are unaffected |
 
 The id is minted exactly once, at the edge where the claim enters the platform. Everywhere else the rule is propagate, never create: a missing id mid-pipeline is a bug we want to see, not silently paper over with a fresh guid.
 
@@ -76,7 +86,7 @@ Two more things to avoid:
 - **Per-team variations of the key name** (`corrId`, `x-request-id`, `correlation_id`). The value of the convention is that one query finds everything; every variation silently splits the search space. One name, everywhere.
 - **Using the trace id as the correlation id.** Trace ids are infrastructure: they can be sampled away, restarted at a broken hop, and are not under our control. The CorrelationId is a business identifier we own end to end. The two complement each other, as the next section covers, but they are not interchangeable.
 
-One alternative worth naming, because a reviewer will ask: OpenTelemetry **Baggage** is a standard mechanism for carrying application context, such as a correlation id, alongside trace context. We deliberately do not rely on it, for a structural reason: baggage lives and dies with the trace context it rides on, and the whole point of the CorrelationId is to survive the places where traces break, like a human step or the change feed. (In practice the gap is even wider: the modern Service Bus SDK [does not flow baggage through messages](https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/servicebus/Azure.Messaging.ServiceBus/MigrationGuide.md#distributed-tracing) at all, even though the trace context itself makes that hop.) The envelope conventions above are the robust path.
+One alternative a reviewer will ask about: OpenTelemetry **Baggage**, a standard mechanism for carrying application context alongside trace context. We do not rely on it: baggage lives and dies with the trace context it rides on, and the CorrelationId exists precisely to survive the places where traces break. (In practice the gap is wider still: the modern Service Bus SDK [does not flow baggage through messages](https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/servicebus/Azure.Messaging.ServiceBus/MigrationGuide.md#distributed-tracing) at all.) The envelope conventions above are the robust path.
 
 **Open decision: who opens the scope?** There are two ways of working here.
 
@@ -113,7 +123,7 @@ public class CorrelationScopeMiddleware(ILogger<CorrelationScopeMiddleware> logg
 
 Every function in the service then gets the scope for free, and the conventions from the previous list live in exactly one place (`TryFindCorrelationId`) instead of in every handler.
 
-A note on overhead: the middleware only reads a few values and opens one scope, which takes microseconds. That is nothing compared to the real work of the function (calling Service Bus, Cosmos, or another service). The one small cost is that every log line now carries the CorrelationId, a few extra bytes per line in the logging bill. That cost is the same with or without the middleware, and it is exactly what we want: it is what makes every log line findable.
+A note on overhead: the middleware reads a few values and opens one scope, microseconds next to the function's real work. The only ongoing cost is a few extra bytes per log line for the CorrelationId itself, which exists with or without the middleware, and is exactly what makes every line findable.
 
 ---
 
@@ -141,13 +151,15 @@ plus registering the `Microsoft.DurableTask` activity source with OpenTelemetry.
 
 **Cosmos change feed.** A document in a container has no envelope, so trace context cannot ride through this hop: the change-feed consumer starts a new trace. That is structural, not a version issue, so the plan is to accept the break rather than work around it; the CorrelationId on the document (previous section) is the thread that survives and is how the two trace fragments are found again. The exact behaviour with our SDK versions is still to be verified.
 
-**The React front end.** A trace ideally starts in the browser, so the user's action and every backend hop it caused form one picture. The mechanism is the front end sending the `traceparent` header on its API calls (both the OpenTelemetry JS SDK and the Application Insights JS SDK can do this), and the classic failure mode is CORS not allowing the header, which breaks correlation silently. We still need to validate this end to end in our setup. If the front end does not participate, the consequence is mild: the trace simply starts at the first API instead of the browser.
+**The React front end.** A trace ideally starts in the browser, so the user's action and every backend hop it caused form one picture. The mechanism is the front end sending the `traceparent` header on its API calls (both the OpenTelemetry JS SDK and the Application Insights JS SDK can do this).
+
+> ⚠️ The classic failure mode is CORS not allowing the `traceparent` header, which breaks browser-to-backend correlation silently. If the front end does not participate, the consequence is mild: the trace simply starts at the first API instead of the browser.
 
 In short, the pieces we have not validated yet: Event Hubs and Event Grid trigger correlation, the Durable extension versions and configuration in our apps, change-feed behaviour with our SDK versions, and browser-to-backend correlation including CORS.
 
 One more silent trace-breaker to know about: **sampling**. Application Insights samples telemetry by default, and sampling decisions are parent-based: when a parent span is dropped, everything under it goes too, so a whole leg can vanish even though propagation worked fine. When traces come up short in production, check sampling settings before suspecting the plumbing.
 
-**Do we need to store the trace id against the CorrelationId?** Our recommendation: no separate store is needed, because the logs already are that mapping. Every log line written inside a trace carries the trace id automatically, and with the scope from the previous section it carries the CorrelationId too. So one query by CorrelationId returns the trace ids of every fragment of the journey, including across the breaks described above. The practical rule that keeps this true: every service logs at least one line per unit of work.
+**Do we need to store the trace id against the CorrelationId?** Our recommendation: no, the logs already are that mapping. Every log line inside a trace carries the trace id automatically, and with the scope it carries the CorrelationId too, so one query by CorrelationId returns the trace ids of every fragment of the journey. The practical rule that keeps this true: every service logs at least one line per unit of work.
 
 ---
 
@@ -159,12 +171,42 @@ The recommendation is to treat each stage of the process as a **checkpoint** tha
 
 Per-stage counters make two cheap checks possible:
 
-- **Reconciliation.** For any stage, received should equal processed plus failed plus dead-lettered once things settle. The three outcomes must be mutually exclusive, one terminal bucket per claim: a message that ends up dead-lettered counts only as dead-lettered, not also as failed; failed is for claims the handler consumed and deliberately marked as failed. Without that rule every dead-lettered claim counts twice and the mismatch alarm fires by design. When the numbers do not add up, a claim was lost silently, which is precisely the failure mode nothing else surfaces: no error was logged, because nothing knew to log one. The same idea works across stages (stage N sent 100, stage N+1 received 98) and against the task store.
+- **Reconciliation.** For any stage, received should equal processed plus failed plus dead-lettered once things settle, with exactly one terminal bucket per claim (a dead-lettered claim counts only as dead-lettered; failed means the handler consumed it and rejected it; otherwise every dead-letter counts twice and the alarm always fires). When the numbers do not add up, a claim was lost silently, the one failure mode nothing else surfaces: no error was logged because nothing knew to log one. The same check works across stages (stage N sent 100, stage N+1 received 98) and against the task store.
 - **Dead-letter visibility.** A message landing on a dead-letter queue becomes a counter increment, so "we lost one" is a dashboard signal and a potential alert, not something discovered in a queue browser weeks later. One subtlety: count on arrival at the dead-letter queue itself, not in the failing handler, so retries of the same message do not inflate the number.
 
-For these checks to work, one thing has to be defined up front: **how retries are counted**. Service Bus (and the other messaging services) redeliver a message after a failure, so a stage that counts "received" on every delivery attempt but "processed" once per claim drifts a little further on every retry, and the mismatch looks exactly like a lost claim. The rule we propose: the reconciliation counters count claims, not attempts. Received increments on first delivery only (the message's delivery count tells you whether this is a retry), and each claim lands in exactly one terminal counter (processed, failed, or dead-lettered) once its outcome is final, never per attempt. If retry activity is worth watching, and it often is an early sign of a struggling dependency, give it its own counter instead of bending the reconciliation ones.
+For these checks to work, one thing must be defined up front: **how retries are counted**. Service Bus redelivers a message after a failure, so counting "received" per delivery attempt but "processed" once per claim drifts on every retry, and the mismatch looks exactly like a lost claim. The rule we propose: **reconciliation counters count claims, not attempts**. Received increments on first delivery only (the message's delivery count identifies retries), and each claim lands in one terminal counter once its outcome is final. If retry activity is worth watching, and it is often an early sign of a struggling dependency, give it its own counter instead of bending the reconciliation ones.
 
 On top of these, a **simple dashboard**: one row of tiles per stage showing throughput, failures, and dead-letters. Its job is a ten-second scan, either everything is flowing or one stage is off. From there the investigation moves to logs: the dashboard gives the stage and the time window, the logs filtered on those give the failing claims' CorrelationIds, and each CorrelationId gives the full journey.
 
 One deliberate design choice makes that hand-off necessary: **metrics stay anonymous**. It is tempting to tag a failure counter with the CorrelationId, but every distinct value of a metric dimension becomes its own time series, and per-claim dimensions make the number of series explode, which metric backends charge for and eventually reject. Metrics locate the problem; identifying the individual claim is the job of the logs.
+
+---
+
+## What needs to be done, and by whom
+
+We run an Nx monorepo, which changes how much of this page turns into per-team work: the cross-cutting pieces can be fixed once at the source, in the shared libraries, and every app inherits them. The split below follows one rule: anything that must be identical everywhere lives in shared code; anything that requires knowing the business flow lives with the service teams.
+
+**Once, in the shared code (platform ownership)**
+
+- The shared OpenTelemetry extension: exporters, service names, and `IncludeScopes = true` in the logging setup, so no app can silently lose scopes.
+- The right `host.json` configuration for durable apps: the tracing block, the `Microsoft.DurableTask` activity source registration, and aligned extension versions.
+- The correlation scope middleware, if we decide to go that way: built once, registered by every app.
+- A shared metrics service: the meter, the metric names, and the counters teams call, so names never drift between services; including the dead-letter counting pattern (the trigger that turns a dead-lettered message into a counter increment).
+
+**In every service (each team)**
+
+- Pass the CorrelationId in the correct spot on every outbound hop: the request header, the message application property, the `correlationId` property on documents, `InstanceId = CorrelationId` plus the id in activity inputs for orchestrations.
+- Use the replay-safe logger in orchestrator bodies.
+- Have the right logs: at least one line per unit of work, so the CorrelationId-to-trace mapping stays complete.
+- Open the scope at each entry point, if we decide to leave it with the teams.
+- Add the metric counters at the right business checkpoints: received, processed, failed. Only the team knows where those points sit in their flow.
+
+**To investigate and validate (owner to be assigned)**
+
+- **Each app currently exports to its own Application Insights resource.** That quietly undermines the promise of this page: a claim's logs end up scattered across resources, so no single query by CorrelationId finds them all, and the end-to-end trace views fragment the same way. We need a solution: one shared resource, or a workspace setup that can query across all of them.
+- Where the technical dashboard lives (Azure Workbooks, Grafana, something else). This partly depends on the App Insights answer above.
+- Event Hubs and Event Grid trigger trace correlation.
+- Cosmos change feed behaviour with our SDK versions.
+- Browser-to-backend correlation from React, including the CORS configuration.
+- An audit of the durable extension versions our apps actually run.
 
