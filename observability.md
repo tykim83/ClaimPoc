@@ -37,9 +37,7 @@ Because the glue is the W3C standard rather than anything .NET specific, non-.NE
 
 ### One journey, several traces
 
-First, the model that drives everything below. A trace covers one bounded operation: a request arrives, work happens, spans close. A claim is not one bounded operation. It can pause for human input and resume hours or days later, and it can pass through hops where trace context cannot follow. When a person acts in the UI to move a claim forward, that action is a new operation with a new trace id; there is no good way (and no good reason) to force it back into the original trace.
-
-So the realistic picture is: **one claim journey is one CorrelationId and several traces**, one per automated leg, split wherever a human step or a context-breaking hop sits in the middle. The two are complementary, not alternatives. Traces give depth within a leg: timing, dependencies, where an error happened. The CorrelationId is the thread across the whole journey and is how the legs are found together. The next two sections cover each half: how the CorrelationId gets onto every log line, and how we keep each trace leg intact.
+A trace covers one bounded operation: a request arrives, work happens, spans close. A claim is not that. Automation processes it, it drops into fallout, and days later a person resolves it and it is filed into Claim Pilot core; the person's action starts a new trace, and nothing can stitch it back to the old one. That journey can never be one trace, but it is exactly one CorrelationId. So the model is: **one claim journey is one CorrelationId and several traces**. Traces give depth within a leg; the CorrelationId is the thread across the whole journey.
 
 ---
 
