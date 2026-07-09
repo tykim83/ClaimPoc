@@ -15,12 +15,12 @@ This page describes how we make the claim-processing pipeline observable: how we
 We need to answer two different kinds of question, for two different audiences.
 
 **The business view: "where is this claim, and is the process performing?"**
-This is long-lived data about the process itself: the tasks and breadcrumbs WSM stores as a claim progresses, the audit events every system sends to the Audit brick, and any per-claim state other systems keep along the way. It is retained for as long as the business needs it, and it powers a business dashboard: claims in flight, time spent per stage, where claims get stuck.
+This is long-lived data about the process itself: the tasks and breadcrumbs WSM stores as a claim progresses, the audit events every system sends to the Audit brick, and any per-claim state other systems keep along the way. It powers a business dashboard: claims in flight, time spent per stage, where claims get stuck.
 
 **The technical view: "is the system healthy, and why did this fail?"**
 This is the classic observability triad of logs, distributed traces, and metrics, collected with OpenTelemetry from every service. Its audience is engineers and operations: error rates, latencies, dead-lettered messages (messages the platform gave up retrying), the full trace of one failing request. Most of it is high-volume, short-retention data.
 
-The two views are joined by a single identifier: the **CorrelationId**, minted exactly once when a claim enters the platform. It is the key on the business side (tasks, audit events) and it is stamped on every log line on the technical side. Given a claim, support can find its audit trail; given its CorrelationId, an engineer can pull every log line and the distributed trace for that same claim. How that stamping happens automatically, rather than every developer remembering to do it, is the subject of the rest of this page.
+The two views are joined by a single identifier: the **CorrelationId**, minted exactly once when a claim enters the platform. Given a claim, support can find its audit trail; given its CorrelationId, an engineer can pull every log line and the distributed trace for that same claim. How that stamping happens automatically, rather than every developer remembering to do it, is the subject of the rest of this page.
 
 ## The technical view
 
@@ -86,7 +86,7 @@ Two more things to avoid:
 
 One alternative a reviewer will ask about: OpenTelemetry **Baggage**, a standard mechanism for carrying application context alongside trace context. We do not rely on it: baggage lives and dies with the trace context it rides on, and the CorrelationId exists precisely to survive the places where traces break. (In practice the gap is wider still: the modern Service Bus SDK [does not flow baggage through messages](https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/servicebus/Azure.Messaging.ServiceBus/MigrationGuide.md#distributed-tracing) at all.) The envelope conventions above are the robust path.
 
-**Open decision: who opens the scope?** There are two ways of working here.
+**Open decision: who opens the scope?**
 
 - **A shared middleware.** One reusable component, registered once per service, inspects every incoming invocation (HTTP, Service Bus, durable), finds the CorrelationId, and opens the scope. Consistency is guaranteed by construction, and there is a single place to fix or extend the behaviour. The cost: it is a shared component that someone must own, and it has to handle every trigger type we use correctly.
 - **Each team does it themselves.** We publish the conventions above plus code snippets, and every team opens the scope at its own entry points. No shared component to own. The cost: consistency depends on every team's discipline, and one service that forgets breaks the end-to-end view for everyone downstream of it.
@@ -127,7 +127,7 @@ A note on overhead: the middleware reads a few values and opens one scope, micro
 
 ### Traces
 
-The goal is one trace per claim journey: every hop continues the trace context it received instead of starting a fresh trace. For most of our estate this happens automatically once OpenTelemetry is configured. ASP.NET Core and HttpClient propagate the `traceparent` header on every HTTP call, and the Azure Service Bus SDK stamps it onto every message it sends and links it up on receive. Nobody should hand-roll trace propagation; if two hops do not join into one trace, the fix is in configuration, not in passing ids around.
+The goal is one trace per automated leg of the journey: every hop continues the trace context it received instead of starting a fresh trace. For most of our estate this happens automatically once OpenTelemetry is configured. ASP.NET Core and HttpClient propagate the `traceparent` header on every HTTP call, and the Azure Service Bus SDK stamps it onto every message it sends and links it up on receive. Nobody should hand-roll trace propagation; if two hops do not join into one trace, the fix is in configuration, not in passing ids around.
 
 Where we stand per component:
 
@@ -153,8 +153,6 @@ plus registering the `Microsoft.DurableTask` activity source with OpenTelemetry.
 
 > ⚠️ The classic failure mode is CORS not allowing the `traceparent` header, which breaks browser-to-backend correlation silently. If the front end does not participate, the consequence is mild: the trace simply starts at the first API instead of the browser.
 
-In short, the pieces we have not validated yet: Event Hubs and Event Grid trigger correlation, the Durable extension versions and configuration in our apps, change-feed behaviour with our SDK versions, and browser-to-backend correlation including CORS.
-
 One more silent trace-breaker to know about: **sampling**. Application Insights samples telemetry by default, and sampling decisions are parent-based: when a parent span is dropped, everything under it goes too, so a whole leg can vanish even though propagation worked fine. When traces come up short in production, check sampling settings before suspecting the plumbing.
 
 **Do we need to store the trace id against the CorrelationId?** Our recommendation: no, the logs already are that mapping. Every log line inside a trace carries the trace id automatically, and with the scope it carries the CorrelationId too, so one query by CorrelationId returns the trace ids of every fragment of the journey. The practical rule that keeps this true: every service logs at least one line per unit of work.
@@ -163,7 +161,7 @@ One more silent trace-breaker to know about: **sampling**. Application Insights 
 
 ### Metrics
 
-Metrics are the lightest of the three signals. Nothing in the pipeline depends on them at runtime, but they are not quite optional either: the reconciliation check below is the only signal that catches a silently lost claim. What they buy is an always-on early warning. Logs and traces answer "what happened to this claim"; metrics answer "is anything wrong right now" at a glance, without querying any database.
+Metrics are the lightest of the three signals. Nothing in the pipeline depends on them at runtime, but they are not quite optional either: the reconciliation check below is the only signal that catches a silently lost claim. Logs and traces answer "what happened to this claim"; metrics answer "is anything wrong right now" at a glance, without querying any database.
 
 The recommendation is to treat each stage of the process as a **checkpoint** that emits a few counters via an OpenTelemetry meter: claims received, processed, failed, plus a processing-time histogram. This costs a handful of lines per service, and it works the same for services that own a database and for the atomic ones that keep no state at all; the meter is their only footprint, and it is enough.
 
@@ -172,7 +170,7 @@ Per-stage counters make two cheap checks possible:
 - **Reconciliation.** For any stage, received should equal processed plus failed plus dead-lettered once things settle, with exactly one terminal bucket per claim (a dead-lettered claim counts only as dead-lettered; failed means the handler consumed it and rejected it; otherwise every dead-letter counts twice and the alarm always fires). When the numbers do not add up, a claim was lost silently, the one failure mode nothing else surfaces: no error was logged because nothing knew to log one. The same check works across stages (stage N sent 100, stage N+1 received 98) and against the task store.
 - **Dead-letter visibility.** A message landing on a dead-letter queue becomes a counter increment, so "we lost one" is a dashboard signal and a potential alert, not something discovered in a queue browser weeks later. One subtlety: count on arrival at the dead-letter queue itself, not in the failing handler, so retries of the same message do not inflate the number.
 
-For these checks to work, one thing must be defined up front: **how retries are counted**. Service Bus redelivers a message after a failure, so counting "received" per delivery attempt but "processed" once per claim drifts on every retry, and the mismatch looks exactly like a lost claim. The rule we propose: **reconciliation counters count claims, not attempts**. Received increments on first delivery only (the message's delivery count identifies retries), and each claim lands in one terminal counter once its outcome is final. If retry activity is worth watching, and it is often an early sign of a struggling dependency, give it its own counter instead of bending the reconciliation ones.
+For these checks to work, one thing must be defined up front: **how retries are counted**. Service Bus redelivers a message after a failure, so counting "received" per delivery attempt but "processed" once per claim drifts on every retry, and the mismatch looks exactly like a lost claim. The rule we propose: **reconciliation counters count claims, not attempts**. Received increments on first delivery only (the message's delivery count identifies retries). If retry activity is worth watching, and it is often an early sign of a struggling dependency, give it its own counter instead of bending the reconciliation ones.
 
 On top of these, a **simple dashboard**: one row of tiles per stage showing throughput, failures, and dead-letters. Its job is a ten-second scan, either everything is flowing or one stage is off. From there the investigation moves to logs: the dashboard gives the stage and the time window, the logs filtered on those give the failing claims' CorrelationIds, and each CorrelationId gives the full journey.
 
